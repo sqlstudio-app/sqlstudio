@@ -49,6 +49,12 @@ iteration when repeating tests, so failure history has that same limitation.
 Runner regression checks (no build required):
 `powershell -NoProfile -File .\testing\test-suite\compile.tests.ps1`.
 
+The Windows native test executable reserves a 16 MiB stack in Debug and Release
+for ANTLR's recursive parsing of large SQL fixtures. If the parser tests terminate
+with exit code `-1073741571` (`0xC00000FD`, stack overflow), rebuild
+`studio.testing.vcxproj` to apply this linker setting before rerunning tests;
+`-SkipBuild` keeps the existing executable.
+
 On Windows, run the schema-tree and metadata-fetching unit tests with:
 
 ```powershell

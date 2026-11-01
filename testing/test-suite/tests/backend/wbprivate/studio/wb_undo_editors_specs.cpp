@@ -24,13 +24,23 @@
  */
 
 #include "wb_test_helpers.h"
-#include "context.h"
 #include "grt_test_helpers.h"
 #include "gtest/gtest.h"
 
+#include <filesystem>
+
 #include "model/wb_history_tree.h"
 #include "grtdb/db_object_helpers.h"
+#include "sqlide/recordset_be.h"
+#include "../../../../../../plugins/db.mysql.editors/backend/mysql_relationship_editor.h"
+#include "../../../../../../plugins/db.mysql.editors/backend/mysql_routine_editor.h"
+#include "../../../../../../plugins/db.mysql.editors/backend/mysql_routinegroup_editor.h"
+#include "../../../../../../plugins/db.mysql.editors/backend/mysql_schema_editor.h"
 #include "../../../../../../plugins/db.mysql.editors/backend/mysql_table_editor.h"
+#include "../../../../../../plugins/db.mysql.editors/backend/mysql_view_editor.h"
+#include "../../../../../../plugins/wb.model.editors/backend/wb_editor_image.h"
+#include "../../../../../../plugins/wb.model.editors/backend/wb_editor_note.h"
+#include "../../../../../../plugins/wb.model.editors/backend/wb_editor_storednote.h"
 
 using namespace wb;
 
@@ -51,39 +61,39 @@ struct WbUndoEditorsData {
 
 class Undo_Tests_for_EditorsTest : public ::testing::Test {
 protected:
-  static std::unique_ptr<WbUndoEditorsData> data;
+  std::unique_ptr<WbUndoEditorsData> data;
 
-  static void SetUpTestSuite() {
+  void SetUp() override {
     data = std::make_unique<WbUndoEditorsData>();
     data->tester.reset(new SqlStudioTester());
+    data->tester->initializeRuntime();
     data->um = grt::GRT::get()->get_undo_manager();
-    data->overview = WBContextUI::get()->get_physical_overview();
 
+    const std::string dataDir = std::filesystem::absolute("data").lexically_normal().u8string();
+    ASSERT_TRUE(data->tester->wb->open_document(dataDir + "/studio/undo_test_model2.mwb")) << "open_document";
+
+    data->overview = WBContextUI::get()->get_physical_overview();
+    ASSERT_NE(nullptr, data->overview);
     WBContextUI::get()->set_active_form(data->overview);
 
-    std::string dataDir = testing::Context::get().tmpDataDir();
-    bool flag = data->tester->wb->open_document(dataDir + "/studio/undo_test_model2.mwb");
-    EXPECT_TRUE(flag) << "open_document";
-
-    EXPECT_EQ(data->tester->getCatalog()->schemata().count(), 1U) << "schemas";
+    ASSERT_EQ(data->tester->getCatalog()->schemata().count(), 1U) << "schemas";
 
     data->schema = data->tester->getCatalog()->schemata()[0];
     data->rdbms = db_mgmt_RdbmsRef::cast_from(grt::GRT::get()->unserialize(dataDir + "/res/mysql_rdbms_info.xml"));
+    ASSERT_TRUE(data->rdbms.is_valid());
 
     // make sure the loaded model contains expected number of things
-    EXPECT_EQ(data->schema->tables().count(), 2U) << "tables";
-    EXPECT_EQ(data->schema->tables()[0]->columns()->count(), 2U) << "tables";
+    ASSERT_EQ(data->schema->tables().count(), 2U) << "tables";
+    ASSERT_EQ(data->schema->tables()[0]->columns()->count(), 2U) << "tables";
 
-    EXPECT_EQ(data->um->get_undo_stack().size(), 0U) << "undo stack is empty";
+    ASSERT_EQ(data->um->get_undo_stack().size(), 0U) << "undo stack is empty";
   }
 
-  static void TearDownTestSuite() {
+  void TearDown() override {
     data.reset();
   }
 
 };
-
-std::unique_ptr<WbUndoEditorsData> Undo_Tests_for_EditorsTest::data;
 
 TEST_F(Undo_Tests_for_EditorsTest, Editors_general) {
   db_mysql_TableRef table(db_mysql_TableRef::cast_from(data->schema->tables()[0]));
@@ -496,51 +506,187 @@ TEST_F(Undo_Tests_for_EditorsTest, Table_FK_set_ref_column) {
 }
 
 TEST_F(Undo_Tests_for_EditorsTest, Table_inserts) {
-  GTEST_SKIP() << "not implemented";
+  db_mysql_TableRef table(db_mysql_TableRef::cast_from(data->schema->tables()[0]));
+  MySQLTableEditorBE editor(table);
+  RecordsetRef recordset = editor.get_inserts_model();
+  const size_t old_count = recordset->count();
+  ASSERT_GT(recordset->get_column_count(), 0U);
+  recordset->set_field(old_count - 1, 0, std::string("17"));
+  EXPECT_EQ(old_count + 1, recordset->count());
+
+  std::string message;
+  recordset->rollback_and_gather_messages(message);
+  EXPECT_TRUE(message.empty());
+  EXPECT_EQ(old_count, recordset->count());
+  EXPECT_EQ(0U, data->um->get_undo_stack().size());
 }
 
 TEST_F(Undo_Tests_for_EditorsTest, Table_partitioning) {
-  GTEST_SKIP() << "not implemented";
+  db_mysql_TableRef table(db_mysql_TableRef::cast_from(data->schema->tables()[0]));
+  MySQLTableEditorBE editor(table);
+  const std::string old_expression = editor.get_partition_expression();
+
+  editor.set_partition_expression("id + 1");
+  data->checkOnlyOneUndoAdded();
+  EXPECT_EQ("id + 1", editor.get_partition_expression());
+  data->checkUndo();
+  EXPECT_EQ(old_expression, editor.get_partition_expression());
 }
 
 TEST_F(Undo_Tests_for_EditorsTest, Table_options) {
-  GTEST_SKIP() << "not implemented";
+  db_mysql_TableRef table(db_mysql_TableRef::cast_from(data->schema->tables()[0]));
+  MySQLTableEditorBE editor(table);
+  const std::string old_value = editor.get_table_option_by_name("PACK_KEYS");
+  const std::string new_value = old_value == "DEFAULT" ? "1" : "DEFAULT";
+
+  editor.set_table_option_by_name("PACK_KEYS", new_value);
+  data->checkOnlyOneUndoAdded();
+  EXPECT_EQ(new_value, editor.get_table_option_by_name("PACK_KEYS"));
+  data->checkUndo();
+  EXPECT_EQ(old_value, editor.get_table_option_by_name("PACK_KEYS"));
 }
 
 TEST_F(Undo_Tests_for_EditorsTest, View) {
-  GTEST_SKIP() << "not implemented";
+  db_mysql_ViewRef view(grt::Initialized);
+  view->owner(data->schema);
+  view->name("undo_view");
+  data->schema->views().insert(view);
+  data->resetUndoAccounting();
+  MySQLViewEditorBE editor(view);
+  const std::string old_name = view->name();
+
+  editor.set_name("renamed_view");
+  data->checkOnlyOneUndoAdded();
+  EXPECT_EQ("renamed_view", *view->name());
+  data->checkUndo();
+  EXPECT_EQ(old_name, *view->name());
 }
 
 TEST_F(Undo_Tests_for_EditorsTest, Routine) {
-  GTEST_SKIP() << "not implemented";
+  db_mysql_RoutineRef routine(grt::Initialized);
+  routine->owner(data->schema);
+  routine->name("undo_routine");
+  data->schema->routines().insert(routine);
+  data->resetUndoAccounting();
+  MySQLRoutineEditorBE editor(routine);
+  const std::string old_name = routine->name();
+
+  editor.set_name("renamed_routine");
+  data->checkOnlyOneUndoAdded();
+  EXPECT_EQ("renamed_routine", *routine->name());
+  data->checkUndo();
+  EXPECT_EQ(old_name, *routine->name());
 }
 
 TEST_F(Undo_Tests_for_EditorsTest, Routine_group) {
-  GTEST_SKIP() << "not implemented";
+  db_mysql_RoutineGroupRef group(grt::Initialized);
+  group->owner(data->schema);
+  group->name("undo_routine_group");
+  data->schema->routineGroups().insert(group);
+  data->resetUndoAccounting();
+  MySQLRoutineGroupEditorBE editor(group);
+  const std::string old_name = group->name();
+
+  editor.set_name("renamed_routine_group");
+  data->checkOnlyOneUndoAdded();
+  EXPECT_EQ("renamed_routine_group", *group->name());
+  data->checkUndo();
+  EXPECT_EQ(old_name, *group->name());
 }
 
 TEST_F(Undo_Tests_for_EditorsTest, Schema) {
-  GTEST_SKIP() << "not implemented";
+  db_mysql_SchemaRef schema(db_mysql_SchemaRef::cast_from(data->schema));
+  MySQLSchemaEditorBE editor(schema);
+  const std::string old_comment = schema->comment();
+
+  editor.set_comment("schema undo comment");
+  data->checkOnlyOneUndoAdded();
+  EXPECT_EQ("schema undo comment", editor.get_comment());
+  data->checkUndo();
+  EXPECT_EQ(old_comment, editor.get_comment());
 }
 
 TEST_F(Undo_Tests_for_EditorsTest, Relationship) {
-  GTEST_SKIP() << "not implemented";
+  studio_physical_DiagramRef diagram = data->tester->getPmodel()->diagrams()[0];
+  ASSERT_EQ(1U, diagram->connections().count());
+  studio_physical_ConnectionRef relationship(
+    studio_physical_ConnectionRef::cast_from(diagram->connections()[0]));
+  RelationshipEditorBE editor(relationship);
+  const std::string old_caption = editor.get_caption();
+
+  editor.set_caption("undo relationship");
+  data->checkOnlyOneUndoAdded();
+  EXPECT_EQ("undo relationship", editor.get_caption());
+  data->checkUndo();
+  EXPECT_EQ(old_caption, editor.get_caption());
 }
 
 TEST_F(Undo_Tests_for_EditorsTest, Image) {
-  GTEST_SKIP() << "not implemented";
+  studio_model_ImageFigureRef image(grt::Initialized);
+  studio_physical_DiagramRef diagram = data->tester->getPmodel()->diagrams()[0];
+  image->owner(diagram);
+  image->layer(diagram->rootLayer());
+  diagram->figures().insert(image);
+  diagram->rootLayer()->figures().insert(image);
+  data->resetUndoAccounting();
+  ImageEditorBE editor(image);
+  const bool old_value = editor.get_keep_aspect_ratio();
+
+  editor.set_keep_aspect_ratio(!old_value);
+  data->checkOnlyOneUndoAdded();
+  EXPECT_EQ(!old_value, editor.get_keep_aspect_ratio());
+  data->checkUndo();
+  EXPECT_EQ(old_value, editor.get_keep_aspect_ratio());
 }
 
 TEST_F(Undo_Tests_for_EditorsTest, Note) {
-  GTEST_SKIP() << "not implemented";
+  studio_model_NoteFigureRef note(grt::Initialized);
+  studio_physical_DiagramRef diagram = data->tester->getPmodel()->diagrams()[0];
+  note->owner(diagram);
+  note->layer(diagram->rootLayer());
+  diagram->figures().insert(note);
+  diagram->rootLayer()->figures().insert(note);
+  data->resetUndoAccounting();
+  NoteEditorBE editor(note);
+  const std::string old_text = editor.get_text();
+
+  editor.set_text("undo note text");
+  data->checkOnlyOneUndoAdded();
+  EXPECT_EQ("undo note text", editor.get_text());
+  data->checkUndo();
+  EXPECT_EQ(old_text, editor.get_text());
 }
 
 TEST_F(Undo_Tests_for_EditorsTest, Stored_script) {
-  GTEST_SKIP() << "not implemented";
+  db_ScriptRef script(grt::Initialized);
+  script->owner(data->tester->getPmodel());
+  script->name("undo script");
+  data->tester->getPmodel()->scripts().insert(script);
+  data->resetUndoAccounting();
+  StoredNoteEditorBE editor(script);
+  const std::string old_name = editor.get_name();
+
+  editor.set_name("renamed script");
+  data->checkOnlyOneUndoAdded();
+  EXPECT_EQ("renamed script", editor.get_name());
+  data->checkUndo();
+  EXPECT_EQ(old_name, editor.get_name());
 }
 
 TEST_F(Undo_Tests_for_EditorsTest, Stored_note) {
-  GTEST_SKIP() << "not implemented";
+  GrtStoredNoteRef note(grt::Initialized);
+  note->owner(data->tester->getPmodel());
+  note->name("undo note");
+  data->tester->getPmodel()->notes().insert(note);
+  data->resetUndoAccounting();
+  StoredNoteEditorBE editor(note);
+  const std::string old_name = editor.get_name();
+
+  editor.set_name("renamed note");
+  data->checkOnlyOneUndoAdded();
+  EXPECT_EQ("renamed note", editor.get_name());
+  data->checkUndo();
+  EXPECT_EQ(old_name, editor.get_name());
 }
 
 

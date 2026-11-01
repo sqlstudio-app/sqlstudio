@@ -438,6 +438,13 @@ function Run-TestSuite {
         }
     }
     $env:PATH = "$testOutputDir;$studioOutputDir;$($script:BundleDir)\bin;$($script:BundleDir)\lib;$($script:BundleDir)\debug\lib;$env:PATH"
+    $runState = @{
+        Total = $null
+        Passed = 0
+        Failed = 0
+        Skipped = 0
+        CurrentTest = $null
+    }
 
     try {
         $outputHandler = $null
@@ -449,6 +456,20 @@ function Run-TestSuite {
             $useColor = $colorMode -notin @("no", "false", "0")
             $outputHandler = {
                 param($line)
+                if ($line -match '^\[==========\]\s+Running\s+(\d+)\s+tests?\b') {
+                    $runState.Total = [int]$Matches[1]
+                } elseif ($line -match '^\[\s*RUN\s*\]\s+(\S+)') {
+                    $runState.CurrentTest = $Matches[1]
+                } elseif ($line -match '^\[\s*OK\s*\]\s+(\S+)') {
+                    $runState.Passed++
+                    $runState.CurrentTest = $null
+                } elseif ($line -match '^\[\s*FAILED\s*\]\s+(\S+)') {
+                    $runState.Failed++
+                    $runState.CurrentTest = $null
+                } elseif ($line -match '^\[\s*SKIPPED\s*\]\s+(\S+)') {
+                    $runState.Skipped++
+                    $runState.CurrentTest = $null
+                }
                 Save-FailedSuite -Line $line -Path $failurePath
                 Write-TestOutput -Line $line -UseColor $useColor
             }
@@ -467,7 +488,33 @@ function Run-TestSuite {
                     Remove-Item -LiteralPath $historyPath
                 }
                 if ($trackResults) {
-                    Write-Warn "No XML report was produced. Completed failures remain recorded in $failurePath; unfinished tests cannot be inferred."
+                    if ($runState.CurrentTest) {
+                        $interruptedSuite = ($runState.CurrentTest -split '\.', 2)[0]
+                        if ($interruptedSuite -match '^[A-Za-z0-9_/]+$' -and
+                            @(Get-Content -LiteralPath $failurePath) -notcontains $interruptedSuite) {
+                            Add-Content -LiteralPath $failurePath -Value $interruptedSuite
+                        }
+                    }
+
+                    $completed = $runState.Passed + $runState.Failed + $runState.Skipped
+                    Write-Host ""
+                    Write-TestOutput -Line "[==========] Test process terminated before the Google Test summary." -UseColor $useColor
+                    if ($null -ne $runState.Total) {
+                        Write-Host ("[ COMPLETED ] {0} of {1} tests." -f $completed, $runState.Total)
+                    } else {
+                        Write-Host ("[ COMPLETED ] {0} tests." -f $completed)
+                    }
+                    Write-TestOutput -Line ("[  PASSED  ] {0} tests." -f $runState.Passed) -UseColor $useColor
+                    if ($runState.Failed -gt 0) {
+                        Write-TestOutput -Line ("[  FAILED  ] {0} completed tests." -f $runState.Failed) -UseColor $useColor
+                    }
+                    if ($runState.Skipped -gt 0) {
+                        Write-TestOutput -Line ("[  SKIPPED ] {0} tests." -f $runState.Skipped) -UseColor $useColor
+                    }
+                    if ($runState.CurrentTest) {
+                        Write-Host ("[INTERRUPTED] {0}" -f $runState.CurrentTest) -ForegroundColor Red
+                    }
+                    Write-Warn "No XML report was produced. Completed failures and the interrupted suite were recorded in $failurePath."
                 }
             }
         }

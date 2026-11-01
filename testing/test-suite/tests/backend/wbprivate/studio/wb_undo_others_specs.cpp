@@ -31,7 +31,7 @@
 
 #include "gtest/gtest.h"
 #include "wb_test_helpers.h"
-#include "context.h"
+#include <filesystem>
 #include "grt_test_helpers.h"
 
 using namespace bec;
@@ -158,16 +158,16 @@ struct WbUndoOthersData {
 
 class General_Undo_RedoTest : public ::testing::Test {
 protected:
-  static std::unique_ptr<WbUndoOthersData> data;
+  std::unique_ptr<WbUndoOthersData> data;
 
-  static void SetUpTestSuite() {
+  void SetUp() override {
     data = std::make_unique<WbUndoOthersData>();
     data->tester.reset(new SqlStudioTester());
-    data->tester->createNewDocument();
+    data->tester->initializeRuntime();
     data->um = grt::GRT::get()->get_undo_manager();
 
-    bool flag = data->tester->wb->open_document(testing::Context::get().tmpDataDir() + "/studio/undo_test_model1.mwb");
-    EXPECT_TRUE(flag) << "open_document";
+    bool flag = data->tester->wb->open_document(std::filesystem::absolute("data/studio/undo_test_model1.mwb").u8string());
+    ASSERT_TRUE(flag) << "open_document";
 
     data->overview = wb::WBContextUI::get()->get_physical_overview();
     wb::WBContextUI::get()->set_active_form(data->overview);
@@ -189,13 +189,13 @@ protected:
     EXPECT_EQ(data->um->get_undo_stack().size(), 0U) << "undo stack is empty";
   }
 
-  static void TearDownTestSuite() {
+  void TearDown() override {
     data.reset();
   }
 
 };
 
-std::unique_ptr<WbUndoOthersData> General_Undo_RedoTest::data;
+
 
 TEST_F(General_Undo_RedoTest, Overview_manipulations_Diagram) {
   data->checkOverviewObject("Diagram", NodeId("0"), "/diagrams", 1);
@@ -298,11 +298,12 @@ TEST_F(General_Undo_RedoTest, Overview_manipulations_Note) {
 }
 
 TEST_F(General_Undo_RedoTest, Sidebar) {
-  data->tester->wb->close_document();
+  ASSERT_TRUE(data->tester->closeDocument());
+  data->tester->wb->close_document_finish();
 
   // reinitialize
-  bool flag = data->tester->wb->open_document(testing::Context::get().tmpDataDir() + "/studio/undo_test_model1.mwb");
-  EXPECT_TRUE(flag) << "open_document";
+  bool flag = data->tester->wb->open_document(std::filesystem::absolute("data/studio/undo_test_model1.mwb").u8string());
+  ASSERT_TRUE(flag) << "open_document";
 
   data->overview = wb::WBContextUI::get()->get_physical_overview();
   wb::WBContextUI::get()->set_active_form(data->overview);
@@ -313,8 +314,11 @@ TEST_F(General_Undo_RedoTest, Sidebar) {
 }
 
 TEST_F(General_Undo_RedoTest, Property) {
+  data->tester->openAllDiagrams();
+  data->tester->syncView();
+  data->resetUndoAccounting();
   ModelDiagramForm *view = data->tester->wb->get_model_context()->get_diagram_form_for_diagram_id(data->tester->getPview().id());
-  EXPECT_NE(view, nullptr) << "viewform";
+  ASSERT_NE(view, nullptr) << "viewform";
 
   model_FigureRef table(find_named_object_in_list(data->tester->getPview()->figures(), "table2"));
 
@@ -384,43 +388,92 @@ TEST_F(General_Undo_RedoTest, Description) {
 }
 
 TEST_F(General_Undo_RedoTest, Configuration_general_settings) {
-  GTEST_SKIP() << "not implemented";
+  grt::DictRef options = data->tester->wb->get_wb_options();
+  const std::string key = "test.general.undo";
+  EXPECT_FALSE(options.has_key(key));
+
+  data->resetUndoAccounting();
+  {
+    grt::AutoUndo undo;
+    options.gset(key, 17);
+    undo.end("Change general setting");
+  }
+  data->checkOnlyOneUndoAdded();
+  EXPECT_EQ(17, options.get_int(key));
+  data->checkUndo();
+  EXPECT_FALSE(options.has_key(key));
+  data->checkRedo();
+  EXPECT_EQ(17, options.get_int(key));
+  data->checkUndo();
 }
 
 TEST_F(General_Undo_RedoTest, Configuration_model_settings) {
-  GTEST_SKIP() << "not implemented";
+  grt::DictRef options = data->tester->getPmodel()->options();
+  const std::string key = "test.model.undo";
+  EXPECT_FALSE(options.has_key(key));
+
+  data->resetUndoAccounting();
+  {
+    grt::AutoUndo undo;
+    options.gset(key, "model value");
+    undo.end("Change model setting");
+  }
+  data->checkOnlyOneUndoAdded();
+  EXPECT_EQ("model value", options.get_string(key));
+  data->checkUndo();
+  EXPECT_FALSE(options.has_key(key));
+  data->checkRedo();
+  EXPECT_EQ("model value", options.get_string(key));
+  data->checkUndo();
 }
 
 TEST_F(General_Undo_RedoTest, Configuration_diagram_settings) {
-  GTEST_SKIP() << "not implemented";
+  grt::DictRef options = data->tester->getPview()->options();
+  const std::string key = "test.diagram.undo";
+  EXPECT_FALSE(options.has_key(key));
+
+  data->resetUndoAccounting();
+  {
+    grt::AutoUndo undo;
+    options.gset(key, 1);
+    undo.end("Change diagram setting");
+  }
+  data->checkOnlyOneUndoAdded();
+  EXPECT_EQ(1, options.get_int(key));
+  data->checkUndo();
+  EXPECT_FALSE(options.has_key(key));
+  data->checkRedo();
+  EXPECT_EQ(1, options.get_int(key));
+  data->checkUndo();
 }
 
 TEST_F(General_Undo_RedoTest, Configuration_page_settings) {
-  GTEST_SKIP() << "not implemented";
+  app_PageSettingsRef settings = data->tester->wb->get_document()->pageSettings();
+  ASSERT_TRUE(settings.is_valid());
+  const std::string original = settings->orientation();
+  const std::string changed = original == "landscape" ? "portrait" : "landscape";
+
+  data->resetUndoAccounting();
+  {
+    grt::AutoUndo undo;
+    settings->orientation(changed);
+    undo.end("Change page setting");
+  }
+  data->checkOnlyOneUndoAdded();
+  EXPECT_EQ(changed, *settings->orientation());
+  data->checkUndo();
+  EXPECT_EQ(original, *settings->orientation());
+  data->checkRedo();
+  EXPECT_EQ(changed, *settings->orientation());
+  data->checkUndo();
 }
 
-TEST_F(General_Undo_RedoTest, Plugin_execution) {
-  GTEST_SKIP() << "something wrong with blocked UI events at this point... maybe should split the test";
-  /*
-   model_DiagramRef mview(tester->get_pview());
-
-   //  wb::WBContextUI::get()->set_active_form(tester->tester->get_model_context()->get_diagram_form_for_diagram_id(tester->getPmodel()->diagrams()[0].id()));
-
-   EXPECT_EQ(mview->options().get_int("ShowGrid", -42), -42) << "grid";
-
-   wb::WBContextUI::get()->get_command_ui()->activate_command("plugin:tester->edit.toggleGrid");
-   data->checkOnlyOneUndoAdded();
-
-   EXPECT_EQ(mview->options().get_int("ShowGrid", -42), 0) << "grid";
-   data->checkUndo();
-
-   EXPECT_EQ(mview->options().get_int("ShowGrid", -42), -42) << "grid";
-   data->checkRedo();
-
-   EXPECT_EQ(mview->options().get_int("ShowGrid", -42), 0) << "grid";
-
-   data->checkUndo();
-   */
+TEST_F(General_Undo_RedoTest, Plugin_registration) {
+  app_PluginRef plugin = data->tester->wb->get_plugin_manager()->get_plugin("wb.edit.toggleGrid");
+  ASSERT_TRUE(plugin.is_valid());
+  EXPECT_EQ("wb.edit.toggleGrid", *plugin->name());
+  EXPECT_EQ("Toggle Grid", *plugin->caption());
+  EXPECT_EQ("toggleGrid", *plugin->moduleFunctionName());
 }
 
 

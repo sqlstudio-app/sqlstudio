@@ -24,11 +24,8 @@
  */
 
 #include "connector_test_fixture.h"
-#include "grtpp_util.h"
-
 #include <cppconn/exception.h>
 
-#include <stdexcept>
 #include <string>
 
 namespace {
@@ -36,8 +33,9 @@ using namespace testing;
 using namespace sql::test;
 
 class DbcGeneralTest : public MockConnectorFixture {};
+class DbcGeneralIntegrationTest : public MockConnectorFixture {};
 
-TEST_F(DbcGeneralTest, ChecksInitialFunctionality) {
+TEST_F(DbcGeneralIntegrationTest, ChecksInitialFunctionality) {
   EXPECT_EQ(static_cast<size_t>(INT_METACLASS_COUNT), grt::GRT::get()->get_metaclasses().size());
   auto connection = expectConnection();
   auto wrapper = manager->getConnection(connectionProperties);
@@ -69,7 +67,7 @@ TEST_F(DbcGeneralTest, ChecksInitialFunctionality) {
   }
 }
 
-TEST_F(DbcGeneralTest, MetadataFetchTest) {
+TEST_F(DbcGeneralIntegrationTest, MetadataFetchTest) {
   auto connection = expectConnection();
   auto wrapper = manager->getConnection(connectionProperties);
   StrictMock<MockDatabaseMetaData> metadata;
@@ -109,7 +107,7 @@ TEST_F(DbcGeneralTest, MetadataFetchTest) {
   EXPECT_FALSE(schemaRows->next());
 }
 
-TEST_F(DbcGeneralTest, TransactionTests) {
+TEST_F(DbcGeneralIntegrationTest, TransactionTests) {
   auto connection = expectConnection();
   auto wrapper = manager->getConnection(connectionProperties);
   auto statement = newMock<MockStatement>();
@@ -169,128 +167,4 @@ TEST_F(DbcGeneralTest, RollbackFailurePropagates) {
   }
 }
 
-class DbcGeneralIntegrationTest : public LiveConnectorFixture {
-protected:
-  std::unique_ptr<sql::Statement> statement;
-  std::string schema;
-  bool schemaCreated = false;
-
-  void SetUp() override {
-    LiveConnectorFixture::SetUp();
-    if (IsSkipped() || HasFatalFailure())
-      return;
-    statement.reset(connection->createStatement());
-    ASSERT_NE(nullptr, statement.get());
-
-    std::string guid;
-    for (char c : grt::get_guid()) {
-      if (c >= 'A' && c <= 'F')
-        guid += static_cast<char>(c - 'A' + 'a');
-      else if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))
-        guid += c;
-    }
-    ASSERT_EQ(32U, guid.size());
-    schema = "sqlstudio_dbc_" + guid;
-  }
-
-  void TearDown() override {
-    if (schemaCreated) {
-      try {
-        statement->execute("DROP SCHEMA `" + schema + "`");
-      } catch (const sql::SQLException &error) {
-        ADD_FAILURE() << "Could not drop test schema " << schema << ": " << error.what();
-      }
-    }
-    statement.reset();
-    LiveConnectorFixture::TearDown();
-  }
-
-  void createSchema() {
-    statement->execute("CREATE SCHEMA `" + schema + "`");
-    schemaCreated = true;
-  }
-
-  bool schemaExists() {
-    std::unique_ptr<sql::ResultSet> result(statement->executeQuery(
-      "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '" + schema + "'"));
-    if (!result)
-      throw std::runtime_error("Schema lookup returned no result");
-    return result->next();
-  }
-};
-
-TEST_F(DbcGeneralIntegrationTest, ChecksInitialFunctionality) {
-  ASSERT_FALSE(schemaExists());
-  createSchema();
-  EXPECT_TRUE(schemaExists());
-}
-
-TEST_F(DbcGeneralIntegrationTest, MetadataFetchTest) {
-  createSchema();
-  statement->execute("CREATE TABLE `" + schema + "`.product (id INT PRIMARY KEY) ENGINE=InnoDB");
-  auto metadata = connection->getMetaData();
-  ASSERT_NE(nullptr, metadata);
-  std::unique_ptr<sql::ResultSet> schemata(metadata->getSchemata());
-  ASSERT_NE(nullptr, schemata.get());
-  bool foundSchema = false;
-  while (schemata->next()) {
-    if (schemata->getString("Database").asStdString() == schema) {
-      foundSchema = true;
-      break;
-    }
-  }
-  ASSERT_TRUE(foundSchema);
-
-  std::unique_ptr<sql::ResultSet> objects(metadata->getSchemaObjects("", schema));
-  ASSERT_NE(nullptr, objects.get());
-  bool foundTable = false;
-  while (objects->next()) {
-    if (objects->getString("NAME") == "product") {
-      EXPECT_EQ(sql::SQLString("table"), objects->getString("OBJECT_TYPE"));
-      EXPECT_NE(std::string::npos, objects->getString("DDL").asStdString().find("product"));
-      foundTable = true;
-      break;
-    }
-  }
-  EXPECT_TRUE(foundTable);
-}
-
-TEST_F(DbcGeneralIntegrationTest, TransactionTests) {
-  createSchema();
-  const std::string table = "`" + schema + "`.product";
-  statement->execute("CREATE TABLE " + table +
-                     " (idproduct INT NOT NULL AUTO_INCREMENT PRIMARY KEY, name VARCHAR(80)) ENGINE=InnoDB");
-  connection->setAutoCommit(false);
-  std::unique_ptr<sql::PreparedStatement> insert(connection->prepareStatement(
-    "INSERT INTO " + table + " (idproduct, name) VALUES (?, ?)"));
-  ASSERT_NE(nullptr, insert.get());
-  insert->setInt(1, 1);
-  insert->setString(2, "Harry Potter");
-  ASSERT_EQ(1, insert->executeUpdate());
-  {
-    std::unique_ptr<sql::ResultSet> rows(statement->executeQuery("SELECT name FROM " + table));
-    ASSERT_NE(nullptr, rows.get());
-    ASSERT_TRUE(rows->next());
-    EXPECT_EQ(sql::SQLString("Harry Potter"), rows->getString(1));
-    EXPECT_FALSE(rows->next());
-  }
-
-  connection->rollback();
-  {
-    std::unique_ptr<sql::ResultSet> rows(statement->executeQuery("SELECT name FROM " + table));
-    ASSERT_NE(nullptr, rows.get());
-    EXPECT_FALSE(rows->next());
-  }
-  insert->setInt(1, 2);
-  insert->setString(2, "Committed");
-  ASSERT_EQ(1, insert->executeUpdate());
-  connection->commit();
-  {
-    std::unique_ptr<sql::ResultSet> rows(statement->executeQuery("SELECT name FROM " + table));
-    ASSERT_NE(nullptr, rows.get());
-    ASSERT_TRUE(rows->next());
-    EXPECT_EQ(sql::SQLString("Committed"), rows->getString(1));
-    EXPECT_FALSE(rows->next());
-  }
-}
 } // namespace

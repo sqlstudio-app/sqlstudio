@@ -5,6 +5,7 @@
 #include <cppconn/prepared_statement.h>
 #include <cppconn/statement.h>
 #include <cppconn/resultset.h>
+#include <cppconn/resultset_metadata.h>
 #include <cppconn/metadata.h>
 #include <gmock/gmock.h>
 
@@ -13,6 +14,35 @@ class Fido_Callback;
 class WebAuthn_Callback;
 namespace test {
 // No override specifiers: newer connector releases add methods to these interfaces.
+class MockResultSetMetaData : public ResultSetMetaData {
+public:
+  ~MockResultSetMetaData() override = default;
+  MOCK_METHOD(SQLString, getCatalogName, (unsigned int column), (override));
+  MOCK_METHOD(unsigned int, getColumnCount, (), (override));
+  MOCK_METHOD(unsigned int, getColumnDisplaySize, (unsigned int column), (override));
+  MOCK_METHOD(SQLString, getColumnLabel, (unsigned int column), (override));
+  MOCK_METHOD(SQLString, getColumnName, (unsigned int column), (override));
+  MOCK_METHOD(int, getColumnType, (unsigned int column), (override));
+  MOCK_METHOD(SQLString, getColumnTypeName, (unsigned int column), (override));
+  MOCK_METHOD(SQLString, getColumnCharset, (unsigned int columnIndex), (override));
+  MOCK_METHOD(SQLString, getColumnCollation, (unsigned int columnIndex), (override));
+  MOCK_METHOD(unsigned int, getPrecision, (unsigned int column), (override));
+  MOCK_METHOD(unsigned int, getScale, (unsigned int column), (override));
+  MOCK_METHOD(SQLString, getSchemaName, (unsigned int column), (override));
+  MOCK_METHOD(SQLString, getTableName, (unsigned int column), (override));
+  MOCK_METHOD(bool, isAutoIncrement, (unsigned int column), (override));
+  MOCK_METHOD(bool, isCaseSensitive, (unsigned int column), (override));
+  MOCK_METHOD(bool, isCurrency, (unsigned int column), (override));
+  MOCK_METHOD(bool, isDefinitelyWritable, (unsigned int column), (override));
+  MOCK_METHOD(int, isNullable, (unsigned int column), (override));
+  MOCK_METHOD(bool, isNumeric, (unsigned int column), (override));
+  MOCK_METHOD(bool, isReadOnly, (unsigned int column), (override));
+  MOCK_METHOD(bool, isSearchable, (unsigned int column), (override));
+  MOCK_METHOD(bool, isSigned, (unsigned int column), (override));
+  MOCK_METHOD(bool, isWritable, (unsigned int column), (override));
+  MOCK_METHOD(bool, isZerofill, (unsigned int column), (override));
+};
+
 class MockDriver : public Driver {
 public:
   ~MockDriver() override { destroyed(); }
