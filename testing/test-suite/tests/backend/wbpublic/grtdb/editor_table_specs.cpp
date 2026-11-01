@@ -26,6 +26,8 @@
  * Copyright (c) 2026 dev4fun. All rights reserved.
  */
 
+#include <initializer_list>
+
 #include "gtest/gtest.h"
 #include "wb_test_helpers.h"
 
@@ -154,6 +156,15 @@ namespace {
       data->table->owner(schema);
 
       data->editor.reset(new TestTableEditor(data->table, data->tester->getRdbms()));
+    }
+
+    void createColumns(std::initializer_list<const char *> names) {
+      for (const char *name : names)
+        data->editor->add_column(name);
+
+      auto *columns = data->editor->get_columns();
+      ASSERT_TRUE(columns->set_field(0, TableColumnsListBE::Type, "INT"));
+      ASSERT_TRUE(columns->set_field(0, TableColumnsListBE::IsPK, 1));
     }
 
     void TearDown() override {
@@ -356,10 +367,11 @@ namespace {
   }
 
   TEST_F(TableEditorBackendTest, RemoveColumnKeepsOrder) {
+    ASSERT_NO_FATAL_FAILURE(createColumns({"id", "name", "salary", "department", "email"}));
     TableColumnsListBE *clist = data->editor->get_columns();
     bool flag;
 
-    EXPECT_EQ(6U, clist->count()) << "column count";
+    ASSERT_EQ(6U, clist->count()) << "column count";
 
     data->editor->remove_column(3);
 
@@ -381,24 +393,85 @@ namespace {
     EXPECT_EQ("email", name);
   }
 
-  TEST_F(TableEditorBackendTest, PendingFeatureOne) {
-    // TODO: needs implementation
-    GTEST_SKIP() << "needs implementation";
+  TEST_F(TableEditorBackendTest, ReorderColumnsPreservesPrimaryKeyOrder) {
+    ASSERT_NO_FATAL_FAILURE(createColumns({"id", "name", "email"}));
+    auto *columns = data->editor->get_columns();
+    ASSERT_TRUE(columns->set_field(2, TableColumnsListBE::Type, "INT"));
+    ASSERT_TRUE(columns->set_field(2, TableColumnsListBE::IsPK, 1));
+
+    const db_ColumnRef id = data->table->columns()[0];
+    const db_ColumnRef name = data->table->columns()[1];
+    const db_ColumnRef email = data->table->columns()[2];
+    const db_IndexRef primaryKey = data->table->primaryKey();
+    ASSERT_TRUE(primaryKey.is_valid());
+    ASSERT_EQ(2U, primaryKey->columns().count());
+
+    columns->reorder(NodeId(2), 0);
+
+    ASSERT_EQ(4U, columns->count()); // Includes the placeholder row.
+    EXPECT_EQ(email, data->table->columns()[0]);
+    EXPECT_EQ(id, data->table->columns()[1]);
+    EXPECT_EQ(name, data->table->columns()[2]);
+    ASSERT_EQ(2U, primaryKey->columns().count());
+    EXPECT_EQ(email, primaryKey->columns()[0]->referencedColumn());
+    EXPECT_EQ(id, primaryKey->columns()[1]->referencedColumn());
+
+    columns->reorder(NodeId(0), 2);
+
+    EXPECT_EQ(id, data->table->columns()[0]);
+    EXPECT_EQ(name, data->table->columns()[1]);
+    EXPECT_EQ(email, data->table->columns()[2]);
+    ASSERT_EQ(2U, primaryKey->columns().count());
+    EXPECT_EQ(id, primaryKey->columns()[0]->referencedColumn());
+    EXPECT_EQ(email, primaryKey->columns()[1]->referencedColumn());
   }
 
-  TEST_F(TableEditorBackendTest, PendingFeatureTwo) {
-    // TODO: needs implementation
-    GTEST_SKIP() << "needs implementation";
+  TEST_F(TableEditorBackendTest, DuplicateColumnPreservesSettingsAndUsesUniqueNames) {
+    ASSERT_NO_FATAL_FAILURE(createColumns({"id", "salary"}));
+    auto *columns = data->editor->get_columns();
+    ASSERT_TRUE(columns->set_field(1, TableColumnsListBE::Type, "INT"));
+    ASSERT_TRUE(columns->set_field(1, TableColumnsListBE::IsNotNull, 1));
+    ASSERT_TRUE(columns->set_field(1, TableColumnsListBE::Default, "100"));
+    const db_ColumnRef original = data->table->columns()[1];
+    original->comment("Annual salary");
+    original->oldName("previous_salary");
+
+    const NodeId first = data->editor->duplicate_column(original);
+    ASSERT_EQ(2U, first[0]);
+    ASSERT_EQ(3U, data->table->columns().count());
+    const db_ColumnRef copy = data->table->columns()[first[0]];
+    EXPECT_NE(original.id(), copy.id());
+    EXPECT_EQ("salary_copy1", *copy->name());
+    EXPECT_EQ("", *copy->oldName());
+    EXPECT_EQ(data->table, copy->owner());
+    EXPECT_EQ(original->simpleType(), copy->simpleType());
+    EXPECT_EQ(1, *copy->isNotNull());
+    EXPECT_EQ("100", *copy->defaultValue());
+    EXPECT_EQ("Annual salary", *copy->comment());
+
+    const NodeId second = data->editor->duplicate_column(original);
+    ASSERT_EQ(3U, second[0]);
+    ASSERT_EQ(5U, columns->count()); // Includes the placeholder row.
+    EXPECT_EQ("salary_copy2", *data->table->columns()[second[0]]->name());
+    EXPECT_NE(copy.id(), data->table->columns()[second[0]].id());
+
+    copy->comment("Changed copy");
+    EXPECT_EQ("salary", *original->name());
+    EXPECT_EQ("previous_salary", *original->oldName());
+    EXPECT_EQ("Annual salary", *original->comment());
+    ASSERT_EQ(1U, data->table->primaryKey()->columns().count());
+    EXPECT_EQ(data->table->columns()[0], data->table->primaryKey()->columns()[0]->referencedColumn());
   }
 
 TEST_F(TableEditorBackendTest, AddAndConfigureIndexes) {
+  ASSERT_NO_FATAL_FAILURE(createColumns({"id", "name", "salary", "email"}));
   IndexListBE *index = data->editor->get_indexes();
   IndexColumnsListBE *icolumns = index->get_columns();
   std::string name, type, comment;
   bool flag;
 
-  EXPECT_EQ(5U, data->editor->get_columns()->count()) << "column count";
-  EXPECT_EQ(2U, data->editor->get_indexes()->count()) << "index count";
+  ASSERT_EQ(5U, data->editor->get_columns()->count()) << "column count";
+  ASSERT_EQ(2U, data->editor->get_indexes()->count()) << "index count";
 
   NodeId node = data->editor->add_index("idx1");
 
@@ -570,6 +643,10 @@ TEST_F(TableEditorBackendTest, AddAndConfigureIndexes) {
 }
 
 TEST_F(TableEditorBackendTest, IndexesStayConsistentAfterColumnRemoval) {
+  ASSERT_NO_FATAL_FAILURE(createColumns({"id", "name", "salary", "email"}));
+  const NodeId nameEmailIndex = data->editor->add_index_with_columns({NodeId(1), NodeId(3)});
+  ASSERT_TRUE(data->editor->get_indexes()->set_field(nameEmailIndex, IndexListBE::Name, "namemail_index"));
+  ASSERT_EQ(2U, data->table->indices().count());
   IndexListBE *index = data->editor->get_indexes();
   // IndexColumnsListBE *icolumns= index->get_columns();
   std::vector<NodeId> columns;
@@ -603,7 +680,7 @@ TEST_F(TableEditorBackendTest, IndexesStayConsistentAfterColumnRemoval) {
   EXPECT_TRUE(flag);
   EXPECT_EQ("namemail_index", name);
   index->select_index(1);
-  EXPECT_EQ(data->table->indices().get(0)->columns().count(), 1U) << "get index[1] column.count()";
+  EXPECT_EQ(data->table->indices().get(1)->columns().count(), 1U) << "get index[1] column.count()";
 
   flag = index->get_field(2, IndexListBE::Name, name);
   EXPECT_TRUE(flag);
@@ -690,8 +767,8 @@ TEST_F(TableEditorBackendTest, IndexesStayConsistentAfterColumnRemoval) {
 
     // auto-adds a PK
     editor.get_columns()->set_field(0, 1, "int(11)");
-    EXPECT_EQ(table->indices().count(), 1U) << "autoadd PK index";
-    EXPECT_EQ(table->indices()[0]->name().c_str(), "PRIMARY") << "autoadd PK index";
+    ASSERT_EQ(table->indices().count(), 1U) << "autoadd PK index";
+    EXPECT_EQ(*table->indices()[0]->name(), "PRIMARY") << "autoadd PK index";
 
     EXPECT_EQ(table->columns().count(), 1U) << "add column";
 
