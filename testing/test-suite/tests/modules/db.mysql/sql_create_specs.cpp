@@ -26,8 +26,9 @@
 #include "gtest/gtest.h"
 #include "context.h"
 #include "wb_connection_helpers.h"
+#include "base/file_utilities.h"
 
-#include <fstream>
+#include <cstdlib>
 
 #include "grt/grt_manager.h"
 #include "grt.h"
@@ -40,6 +41,7 @@
 #include "grtsqlparser/mysql_parser_services.h"
 
 #include "model_mockup.h"
+#include "wb_model_file.h"
 
 using namespace grt;
 
@@ -48,8 +50,44 @@ struct SqlCreateData {
   std::unique_ptr<SqlStudioTester> tester;
   SQLGeneratorInterfaceImpl *diffsqlModule = nullptr;
   sql::ConnectionWrapper connection;
+  parsers::MySQLParserServices::Ref services = nullptr;
+  parsers::MySQLParserContext::Ref parserContext;
+  std::unique_ptr<wb::ModelFile> modelFile;
 
   std::string dataDir;
+
+  db_mysql_CatalogRef loadCatalog(const std::string &filename) {
+    modelFile = std::make_unique<wb::ModelFile>(testing::Context::get().outputDir());
+    modelFile->open(filename);
+    auto document = modelFile->retrieve_document();
+    return db_mysql_CatalogRef::cast_from(document->physicalModels().get(0)->catalog());
+  }
+
+  void checkExportScript(const std::string &script, bool executeOnServer = true) {
+    ASSERT_FALSE(script.empty());
+    std::vector<parsers::StatementRange> ranges;
+    services->determineStatementRanges(script.c_str(), script.size(), ";", ranges);
+    ASSERT_FALSE(ranges.empty());
+    for (const auto &range : ranges) {
+      std::string statement(script, range.start, range.length);
+      SCOPED_TRACE(statement);
+      EXPECT_EQ(services->checkSqlSyntax(parserContext, statement.c_str(), statement.size(),
+                                        MySQLParseUnit::PuGeneric), 0U);
+      for (const auto &error : parserContext->errorsWithOffset(0))
+        ADD_FAILURE() << error.message;
+    }
+    if (executeOnServer && connection.get()) {
+      std::unique_ptr<sql::Statement> stmt(connection->createStatement());
+      tester->executeScript(stmt.get(), script);
+    }
+  }
+
+  void compareExportScript(const std::string &script, const std::string &expectedFile) {
+    ASSERT_TRUE(base::file_exists(expectedFile)) << "Expected SQL file not found: " << expectedFile;
+    EXPECT_EQ(base::replaceString(base::getTextFileContent(expectedFile), "\r\n", "\n"),
+              base::replaceString(script, "\r\n", "\n"));
+    checkExportScript(script, false);
+  }
 
   std::string strrange(const std::string &s, const std::string &start, const std::string &end) {
     try {
@@ -65,37 +103,49 @@ struct SqlCreateData {
 
 class SQL_code_generationTest : public ::testing::Test {
 protected:
-  static std::unique_ptr<SqlCreateData> data;
+  std::unique_ptr<SqlCreateData> data;
 
-  static void SetUpTestSuite() {
+  void SetUp() override {
     data = std::make_unique<SqlCreateData>();
-    data->dataDir = testing::Context::get().tmpDataDir();
+    data->dataDir = testing::Context::get().baseDir() + "/test-suite/data";
     data->tester.reset(new SqlStudioTester());
     data->tester->initializeRuntime();
+    bec::GRTManager::get()->set_app_option("DefaultTargetMySQLVersion", grt::StringRef("8.0.0"));
+    ASSERT_TRUE(data->tester->closeDocument());
+    data->tester->wb->close_document_finish();
 
     // Load modules.
     data->diffsqlModule = dynamic_cast<SQLGeneratorInterfaceImpl *>(grt::GRT::get()->get_module("DbMySQL"));
-    EXPECT_NE(data->diffsqlModule, nullptr);
+    ASSERT_NE(data->diffsqlModule, nullptr);
 
-    // Init database connection.
-    data->connection = createConnectionForImport();
-
-    std::unique_ptr<sql::Statement> stmt(data->connection->createStatement());
-    stmt->execute("DROP SCHEMA IF EXISTS `A`;");
-    stmt->execute("DROP SCHEMA IF EXISTS `B`;");
+    data->services = parsers::MySQLParserServices::get();
+    data->parserContext = data->services->createParserContext(data->tester->getRdbms()->characterSets(),
+                                                            bec::parse_version("8.0.0"), "", true);
+    const char *liveTests = std::getenv("SQLSTUDIO_SQL_GENERATION_LIVE_TESTS");
+    if (liveTests != nullptr) {
+      ASSERT_TRUE(std::string(liveTests) == "0" || std::string(liveTests) == "1")
+        << "SQLSTUDIO_SQL_GENERATION_LIVE_TESTS must be 0 or 1";
+      if (std::string(liveTests) == "1") {
+        data->connection = createConnectionForImport();
+        std::unique_ptr<sql::Statement> stmt(data->connection->createStatement());
+        stmt->execute("DROP SCHEMA IF EXISTS `A`;");
+        stmt->execute("DROP SCHEMA IF EXISTS `B`;");
+      }
+    }
   }
 
-  static void TearDownTestSuite() {
+  void TearDown() override {
+    if (data && data->tester) {
+      data->tester->closeDocument();
+      data->tester->wb->close_document_finish();
+    }
     data.reset();
   }
 
 };
 
-std::unique_ptr<SqlCreateData> SQL_code_generationTest::data;
-
 TEST_F(SQL_code_generationTest, Validate_mockup_data) {
   ValueRef e;
-  std::unique_ptr<sql::Statement> stmt(data->connection->createStatement());
   NormalizedComparer cmp;
   DbObjectMatchAlterOmf omf;
 
@@ -130,12 +180,11 @@ TEST_F(SQL_code_generationTest, Validate_mockup_data) {
   std::string export_sql_script = options.get_string("OutputScript");
   EXPECT_NE(export_sql_script.find("DROP TABLE IF EXISTS `test_schema`.`t1`"), std::string::npos) << "DROP TABLE not found";
 
-  data->tester->executeScript(stmt.get(), export_sql_script);
+  data->checkExportScript(export_sql_script);
 }
 
 TEST_F(SQL_code_generationTest, Forward_engineering_model_w_o_qualifying_schema) {
   grt::ValueRef e;
-  std::unique_ptr<sql::Statement> stmt(data->connection->createStatement());
   NormalizedComparer cmp;
   DbObjectMatchAlterOmf omf;
 
@@ -163,18 +212,17 @@ TEST_F(SQL_code_generationTest, Forward_engineering_model_w_o_qualifying_schema)
 
   data->diffsqlModule->makeSQLExportScript(catalog, options, create_map, drop_map);
   std::string export_sql_script = options.get_string("OutputScript");
-  data->tester->executeScript(stmt.get(), export_sql_script);
+  EXPECT_NE(export_sql_script.find("USE `test_schema`"), std::string::npos);
+  EXPECT_EQ(export_sql_script.find("CREATE TABLE IF NOT EXISTS `test_schema`."), std::string::npos);
+  data->checkExportScript(export_sql_script);
 }
 
 TEST_F(SQL_code_generationTest, Bug_Nr11926862_NO_WAY_TO_SORT_SCHEMAS_ON_EXPORT) {
   ValueRef e;
-  std::unique_ptr<sql::Statement> stmt(data->connection->createStatement());
   NormalizedComparer cmp;
   DbObjectMatchAlterOmf omf;
 
-  data->tester->wb->open_document(data->dataDir + "/studio/11926862.mwb");
-  db_mysql_CatalogRef catalog =
-    db_mysql_CatalogRef::cast_from(data->tester->wb->get_document()->physicalModels().get(0)->catalog());
+  db_mysql_CatalogRef catalog = data->loadCatalog(data->dataDir + "/studio/11926862.mwb");
 
   cmp.init_omf(&omf);
 
@@ -198,14 +246,18 @@ TEST_F(SQL_code_generationTest, Bug_Nr11926862_NO_WAY_TO_SORT_SCHEMAS_ON_EXPORT)
 
   data->diffsqlModule->makeSQLExportScript(catalog, options, create_map, drop_map);
   std::string export_sql_script = options.get_string("OutputScript");
-  data->tester->executeScript(stmt.get(), export_sql_script);
+  const auto schemaA = export_sql_script.find("CREATE SCHEMA IF NOT EXISTS `A`");
+  const auto schemaB = export_sql_script.find("CREATE SCHEMA IF NOT EXISTS `B`");
+  ASSERT_NE(schemaA, std::string::npos);
+  ASSERT_NE(schemaB, std::string::npos);
+  EXPECT_LT(schemaA, schemaB);
+  data->checkExportScript(export_sql_script);
 }
 
 TEST_F(SQL_code_generationTest, Bug_Nr14278043_DB_SYNCRONIZE_MODEL_GENERATES_INCORRECT_COLLATION) {
   // If somehow the collation doesn't correspond to the charset it should be skipped during
   // sql generation to avoid creating invalid DDL.
   ValueRef e;
-  std::unique_ptr<sql::Statement> stmt(data->connection->createStatement());
   NormalizedComparer cmp;
   DbObjectMatchAlterOmf omf;
 
@@ -240,7 +292,8 @@ TEST_F(SQL_code_generationTest, Bug_Nr14278043_DB_SYNCRONIZE_MODEL_GENERATES_INC
 
   data->diffsqlModule->makeSQLExportScript(catalog, options, create_map, drop_map);
   std::string export_sql_script = options.get_string("OutputScript");
-  data->tester->executeScript(stmt.get(), export_sql_script);
+  EXPECT_EQ(export_sql_script.find("latin_1_swedish_ci"), std::string::npos);
+  data->checkExportScript(export_sql_script);
 }
 
 TEST_F(SQL_code_generationTest, Generation_of_comments_with_support_for_truncation) {
@@ -361,14 +414,11 @@ TEST_F(SQL_code_generationTest, Generation_of_comments_with_support_for_truncati
 TEST_F(SQL_code_generationTest, bug_11765994_fwd_view_can_be_sometimes_problematic_with_case_sensitivity) {
   {
     ValueRef e;
-    std::unique_ptr<sql::Statement> stmt(data->connection->createStatement());
     NormalizedComparer cmp;
     DbObjectMatchAlterOmf omf;
 
     std::string modelfile = data->dataDir + "/forward_engineer/view_mixed_case.mwb";
-    data->tester->wb->open_document(modelfile);
-    db_mysql_CatalogRef catalog =
-      db_mysql_CatalogRef::cast_from(data->tester->wb->get_document()->physicalModels().get(0)->catalog());
+    db_mysql_CatalogRef catalog = data->loadCatalog(modelfile);
 
     cmp.init_omf(&omf);
 
@@ -401,33 +451,17 @@ TEST_F(SQL_code_generationTest, bug_11765994_fwd_view_can_be_sometimes_problemat
 
     std::string expected_sql = data->dataDir + "/forward_engineer/view_mixed_case.expected.broken.sql";
 
-    std::ifstream ref(expected_sql);
-    std::stringstream ss(export_sql_script);
+    data->compareExportScript(export_sql_script, expected_sql);
 
-    std::string line, refline;
-
-    while (ref.good() && ss.good()) {
-      getline(ref, refline);
-      getline(ss, line);
-      EXPECT_EQ(line, refline);
-    }
-
-    EXPECT_FALSE(ref.good() || ss.good()) << "Generated and reference line count differ.";
-
-    data->tester->wb->close_document();
-    data->tester->wb->close_document_finish();
   }
 
   {
     ValueRef e;
-    std::unique_ptr<sql::Statement> stmt(data->connection->createStatement());
     NormalizedComparer cmp;
     DbObjectMatchAlterOmf omf;
 
     std::string modelfile = data->dataDir + "/forward_engineer/view_mixed_case.mwb";
-    data->tester->wb->open_document(modelfile);
-    db_mysql_CatalogRef catalog =
-      db_mysql_CatalogRef::cast_from(data->tester->wb->get_document()->physicalModels().get(0)->catalog());
+    db_mysql_CatalogRef catalog = data->loadCatalog(modelfile);
 
     cmp.init_omf(&omf);
 
@@ -460,31 +494,18 @@ TEST_F(SQL_code_generationTest, bug_11765994_fwd_view_can_be_sometimes_problemat
 
     std::string expected_sql = data->dataDir + "/forward_engineer/view_mixed_case.expected.good.sql";
 
-    std::ifstream ref(expected_sql.c_str());
-    std::stringstream ss(export_sql_script);
+    data->compareExportScript(export_sql_script, expected_sql);
 
-    std::string line, refline;
-
-    while (ref.good() && ss.good()) {
-      getline(ref, refline);
-      getline(ss, line);
-      EXPECT_EQ(line, refline);
-    }
-
-    data->tester->wb->close_document();
-    data->tester->wb->close_document_finish();
   }
 }
 
 TEST_F(SQL_code_generationTest, Forward_engineering_after_renaming_a_schema) {
   ValueRef e;
-  std::unique_ptr<sql::Statement> stmt(data->connection->createStatement());
   NormalizedComparer cmp;
   DbObjectMatchAlterOmf omf;
 
   std::string modelfile = data->dataDir + "/forward_engineer/sakila_full.mwb";
-  data->tester->wb->open_document(modelfile);
-  db_mysql_CatalogRef catalog = db_mysql_CatalogRef::cast_from(data->tester->getCatalog());
+  db_mysql_CatalogRef catalog = data->loadCatalog(modelfile);
 
   catalog->schemata()[0]->name("sakila_test");
 
@@ -516,19 +537,8 @@ TEST_F(SQL_code_generationTest, Forward_engineering_after_renaming_a_schema) {
 
   std::string expected_sql = data->dataDir + "/forward_engineer/sakila_name_changed.expected.sql";
 
-  std::ifstream ref(expected_sql.c_str());
-  std::stringstream ss(export_sql_script);
+  data->compareExportScript(export_sql_script, expected_sql);
 
-  std::string line, refline;
-
-  while (ref.good() && ss.good()) {
-    getline(ref, refline);
-    getline(ss, line);
-    EXPECT_EQ(line, refline);
-  }
-
-  data->tester->wb->close_document();
-  data->tester->wb->close_document_finish();
 }
 
 

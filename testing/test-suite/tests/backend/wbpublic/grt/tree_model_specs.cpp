@@ -95,8 +95,53 @@ TEST(GrtTreeModelBase, Serialization) {
 }
 
 TEST(GrtTreeModelBase, CommonTreeModelMethods) {
-  GTEST_SKIP() << "needs implementation";
+  class TestTreeModel : public TreeModel {
+  public:
+    size_t count_children(const NodeId &parent) override {
+      if (!parent.is_valid())
+        return 2;
+      return parent == NodeId(0) ? 2 : 0;
+    }
+    void refresh() override {}
+  } model;
+
+  EXPECT_FALSE(model.get_root().is_valid());
+  EXPECT_EQ(model.count(), 2U);
+  EXPECT_EQ(model.get_node(0), NodeId(0));
+  EXPECT_EQ(model.get_node(1), NodeId(1));
+  const auto child = model.get_child(NodeId(0), 0);
+  EXPECT_EQ(child, NodeId("0.0"));
+  EXPECT_EQ(model.get_parent(child), NodeId(0));
+  EXPECT_EQ(model.get_node_depth(child), 2U);
+  EXPECT_TRUE(model.has_next(NodeId(0)));
+  EXPECT_FALSE(model.has_next(NodeId(1)));
+  EXPECT_EQ(model.get_next(NodeId(0)), NodeId(1));
+  EXPECT_THROW(model.get_next(NodeId(1)), std::out_of_range);
+  EXPECT_TRUE(model.has_next(child));
+  EXPECT_EQ(model.get_next(child), NodeId("0.1"));
+  EXPECT_FALSE(model.has_next(NodeId("0.1")));
+  EXPECT_THROW(model.get_next(NodeId("0.1")), std::out_of_range);
+  EXPECT_TRUE(model.is_expandable(NodeId(0)));
+  EXPECT_FALSE(model.is_expandable(child));
+  EXPECT_FALSE(model.expand_node(NodeId(0)));
+  model.collapse_node(NodeId(0));
+  EXPECT_FALSE(model.is_expanded(NodeId(0)));
+
+  const auto uid = model.nodeid_to_uid(child);
+  EXPECT_EQ(uid, model.nodeid_path_to_uid("0.0"));
+  EXPECT_EQ(model.nodeuid_to_path(uid), "0.0");
+  EXPECT_EQ(model.nodeuid_to_path(nullptr), "");
+  int notifications = 0;
+  auto connection = model.tree_changed_signal()->connect([&](NodeId parent, int previousCount) {
+    EXPECT_EQ(parent, NodeId(0));
+    EXPECT_EQ(previousCount, 2);
+    ++notifications;
+  });
+  model.tree_changed(2, NodeId(0));
+  EXPECT_EQ(notifications, 1);
+  const auto refreshedUid = model.nodeid_to_uid(child);
+  EXPECT_EQ(model.nodeuid_to_path(refreshedUid), "0.0");
+  connection.disconnect();
 }
 
 }
-

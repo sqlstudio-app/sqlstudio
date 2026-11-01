@@ -30,6 +30,7 @@
 
 #include "base/file_utilities.h"
 #include "base/utf8string.h"
+#include "stub/stub_utilities.h"
 
 #include "gtest/gtest.h"
 
@@ -117,11 +118,30 @@ TEST_F(Tests_for_WB_model_fileTest, Model_file_creation_Plus_rename) {
 }
 
 TEST_F(Tests_for_WB_model_fileTest, Open_file_locking_test) {
-  GTEST_SKIP() << "test needs rework as accessing a locked model file no longer throws an exception";
-  ModelFile mf(data->outputDir);
+  const auto path = data->outputDir + "/locking-test.mwb";
+  base::copyFile(data->tmpDataDir + data->BaseModelFile, path);
+  ModelFile first(data->outputDir);
+  ModelFile second(data->outputDir);
+  first.open(path);
+  const auto originalContents = first.get_file_contents(MAIN_DOCUMENT_NAME);
+  ASSERT_FALSE(originalContents.empty());
+  int warnings = 0;
+  mforms::stub::UtilitiesWrapper::set_message_callback([&] {
+    ++warnings;
+    return mforms::ResultOk;
+  });
+  EXPECT_NO_THROW(second.open(path));
+  mforms::stub::UtilitiesWrapper::set_message_callback({});
+  EXPECT_EQ(warnings, 1);
+  EXPECT_TRUE(second.get_tempdir_path().empty());
+  EXPECT_EQ(first.get_file_contents(MAIN_DOCUMENT_NAME), originalContents);
 
-  mf.open(data->tmpDataDir + "/studio/sakila.mwb");
-  EXPECT_ANY_THROW([&]() { mf.open(data->tmpDataDir + "/studio/sakila.mwb"); });
+  first.cleanup();
+  EXPECT_NO_THROW(second.open(path));
+  EXPECT_FALSE(second.get_tempdir_path().empty());
+  EXPECT_EQ(second.get_file_contents(MAIN_DOCUMENT_NAME), originalContents);
+  second.cleanup();
+  EXPECT_TRUE(base::remove(path));
 }
 
 TEST_F(Tests_for_WB_model_fileTest, Reading_comment_test) {

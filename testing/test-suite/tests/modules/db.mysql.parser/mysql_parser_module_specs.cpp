@@ -62,80 +62,122 @@ protected:
     data.reset();
   }
 
+  void checkStatement(const std::string &sql, MySQLQueryType type, const std::string &invalidSql) {
+    SCOPED_TRACE(sql);
+    EXPECT_EQ(data->services->determineQueryType(data->context, sql), type);
+    EXPECT_EQ(data->services->checkSqlSyntax(data->context, sql.c_str(), sql.size(), MySQLParseUnit::PuGeneric), 0U);
+    EXPECT_TRUE(data->context->errorsWithOffset(0).empty());
+
+    EXPECT_GT(data->services->checkSqlSyntax(data->context, invalidSql.c_str(), invalidSql.size(),
+                                           MySQLParseUnit::PuGeneric), 0U) << invalidSql;
+    EXPECT_FALSE(data->context->errorsWithOffset(0).empty());
+
+    EXPECT_EQ(data->services->checkSqlSyntax(data->context, sql.c_str(), sql.size(), MySQLParseUnit::PuGeneric), 0U);
+    EXPECT_TRUE(data->context->errorsWithOffset(0).empty()) << "Previous syntax errors were not cleared";
+  }
+
 };
 
 std::unique_ptr<MysqlParserModuleData> Parser_moduleTest::data;
 
 TEST_F(Parser_moduleTest, alterStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("ALTER TABLE t ADD COLUMN c INT", QtAlterTable, "ALTER TABLE t ADD COLUMN");
+  checkStatement("ALTER DATABASE db CHARACTER SET utf8", QtAlterDatabase, "ALTER DATABASE db CHARACTER SET");
 }
 
 TEST_F(Parser_moduleTest, createStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("CREATE TABLE t (id INT PRIMARY KEY, name VARCHAR(20))", QtCreateTable, "CREATE TABLE t (id)");
+  checkStatement("CREATE VIEW v AS SELECT id FROM t", QtCreateView, "CREATE VIEW v AS SELECT");
 }
 
 TEST_F(Parser_moduleTest, dropStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("DROP TABLE IF EXISTS t", QtDropTable, "DROP TABLE");
+  checkStatement("DROP VIEW IF EXISTS v", QtDropView, "DROP VIEW");
 }
 
 TEST_F(Parser_moduleTest, renameTableStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("RENAME TABLE t TO renamed, u TO other", QtRenameTable, "RENAME TABLE t TO");
 }
 
 TEST_F(Parser_moduleTest, truncateTableStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("TRUNCATE TABLE t", QtTruncateTable, "TRUNCATE TABLE");
 }
 
 TEST_F(Parser_moduleTest, callStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("CALL db.p(1, 'value')", QtCall, "CALL db.p(");
 }
 
 TEST_F(Parser_moduleTest, deleteStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("DELETE FROM t WHERE id = 1", QtDelete, "DELETE FROM t WHERE");
+  checkStatement("DELETE t FROM t JOIN u ON t.id = u.id", QtDelete, "DELETE t FROM t JOIN");
 }
 
 TEST_F(Parser_moduleTest, doStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("DO 1 + 2, CONCAT('a', 'b')", QtDo, "DO");
 }
 
 TEST_F(Parser_moduleTest, handlerStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("HANDLER t OPEN AS h", QtHandler, "HANDLER t OPEN AS");
+  checkStatement("HANDLER h READ FIRST LIMIT 1", QtHandler, "HANDLER h READ");
+  checkStatement("HANDLER h CLOSE", QtHandler, "HANDLER");
 }
 
 TEST_F(Parser_moduleTest, insertStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("INSERT INTO t (id) VALUES (1), (2)", QtInsert, "INSERT INTO t (id) VALUES");
+  checkStatement("INSERT INTO t SELECT id FROM u", QtInsert, "INSERT INTO t SELECT");
 }
 
 TEST_F(Parser_moduleTest, loadStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("LOAD DATA LOCAL INFILE 'rows.csv' INTO TABLE t FIELDS TERMINATED BY ','",
+                 QtLoadData, "LOAD DATA INFILE 'rows.csv' INTO TABLE");
+  checkStatement("LOAD XML INFILE 'rows.xml' INTO TABLE t ROWS IDENTIFIED BY '<row>'",
+                 QtLoadXML, "LOAD XML INFILE 'rows.xml' INTO TABLE");
 }
 
 TEST_F(Parser_moduleTest, replaceStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("REPLACE INTO t (id) VALUES (1)", QtReplace, "REPLACE INTO t VALUES");
 }
 
 TEST_F(Parser_moduleTest, selectStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("SELECT t.id, COUNT(*) FROM t GROUP BY t.id HAVING COUNT(*) > 1 ORDER BY t.id",
+                 QtSelect, "SELECT * FROM");
+  checkStatement("SELECT 1 UNION ALL SELECT 2", QtSelect, "SELECT 1 UNION ALL");
 }
 
 TEST_F(Parser_moduleTest, updateStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("UPDATE t SET name = 'updated' WHERE id = 1", QtUpdate, "UPDATE t SET name =");
 }
 
 TEST_F(Parser_moduleTest, partitioning) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("CREATE TABLE t (id INT) PARTITION BY RANGE (id) "
+                 "(PARTITION p0 VALUES LESS THAN (10), PARTITION p1 VALUES LESS THAN MAXVALUE)",
+                 QtCreateTable, "CREATE TABLE t (id INT) PARTITION BY RANGE");
+  checkStatement("ALTER TABLE t ADD PARTITION (PARTITION p2 VALUES LESS THAN (100))",
+                 QtAlterTable, "ALTER TABLE t ADD PARTITION (PARTITION)");
 }
 
 TEST_F(Parser_moduleTest, transactionOrLockingStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("START TRANSACTION WITH CONSISTENT SNAPSHOT", QtStartTransaction, "START TRANSACTION WITH");
+  checkStatement("COMMIT AND NO CHAIN", QtCommit, "COMMIT AND");
+  checkStatement("ROLLBACK TO SAVEPOINT s", QtRollbackSavepoint, "ROLLBACK TO SAVEPOINT (");
+  checkStatement("SAVEPOINT s", QtSavepoint, "SAVEPOINT");
+  checkStatement("RELEASE SAVEPOINT s", QtReleaseSavepoint, "RELEASE SAVEPOINT");
+  checkStatement("LOCK TABLES t READ, u WRITE", QtLock, "LOCK TABLES t");
+  checkStatement("UNLOCK TABLES", QtUnlock, "UNLOCK");
 }
 
 TEST_F(Parser_moduleTest, replicationStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("CHANGE MASTER TO MASTER_HOST = 'localhost', MASTER_PORT = 3306",
+                 QtChangeMaster, "CHANGE MASTER TO MASTER_HOST =");
+  checkStatement("START SLAVE", QtStartSlave, "START SLAVE UNTIL");
+  checkStatement("STOP SLAVE", QtStopSlave, "STOP SLAVE FOR");
+  checkStatement("PURGE BINARY LOGS TO 'mysql-bin.000010'", QtPurge, "PURGE BINARY LOGS TO");
 }
 
 TEST_F(Parser_moduleTest, preparedStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("PREPARE s FROM 'SELECT ?'", QtPrepare, "PREPARE s FROM");
+  checkStatement("EXECUTE s USING @id", QtExecute, "EXECUTE s USING");
+  checkStatement("DEALLOCATE PREPARE s", QtDeallocate, "DEALLOCATE PREPARE");
 }
 
 TEST_F(Parser_moduleTest, accountManagementStatement) {
@@ -257,27 +299,44 @@ TEST_F(Parser_moduleTest, accountManagementStatement) {
 }
 
 TEST_F(Parser_moduleTest, table_administrationStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("ANALYZE TABLE t", QtAnalyzeTable, "ANALYZE TABLE");
+  checkStatement("CHECK TABLE t QUICK", QtCheckTable, "CHECK TABLE");
+  checkStatement("CHECKSUM TABLE t", QtChecksumTable, "CHECKSUM TABLE");
+  checkStatement("OPTIMIZE TABLE t", QtOptimizeTable, "OPTIMIZE TABLE");
+  checkStatement("REPAIR TABLE t", QtRepairTable, "REPAIR TABLE");
 }
 
 TEST_F(Parser_moduleTest, install_uninstall_statment) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("INSTALL PLUGIN p SONAME 'plugin.dll'", QtInstallPlugin, "INSTALL PLUGIN p SONAME");
+  checkStatement("UNINSTALL PLUGIN p", QtUninstallPlugin, "UNINSTALL PLUGIN");
 }
 
 TEST_F(Parser_moduleTest, setStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("SET @x = 1, @y = 2", QtSet, "SET @x =");
+  checkStatement("SET autocommit = 0", QtSetAutoCommit, "SET autocommit =");
+  checkStatement("SET TRANSACTION ISOLATION LEVEL READ COMMITTED", QtSetTransaction,
+                 "SET TRANSACTION ISOLATION LEVEL");
 }
 
 TEST_F(Parser_moduleTest, showStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("SHOW TABLES FROM db LIKE 't%'", QtShowTables, "SHOW TABLES FROM");
+  checkStatement("SHOW CREATE TABLE t", QtShowCreateTable, "SHOW CREATE TABLE");
+  checkStatement("SHOW VARIABLES LIKE 'sql_mode'", QtShowVariables, "SHOW VARIABLES LIKE");
 }
 
 TEST_F(Parser_moduleTest, other_administrativeStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("FLUSH TABLES", QtFlush, "FLUSH TABLES WITH");
+  checkStatement("KILL QUERY 123", QtKill, "KILL QUERY (");
+  checkStatement("CACHE INDEX t IN default", QtCacheIndex, "CACHE INDEX t IN");
+  checkStatement("LOAD INDEX INTO CACHE t", QtLoadIndex, "LOAD INDEX INTO CACHE");
 }
 
 TEST_F(Parser_moduleTest, utilityStatement) {
-  GTEST_SKIP() << "requires implementation";
+  checkStatement("EXPLAIN SELECT * FROM t WHERE id = 1", QtExplainStatement, "EXPLAIN SELECT * FROM");
+  checkStatement("EXPLAIN t", QtExplainTable, "EXPLAIN (");
+  checkStatement("DESCRIBE t", QtExplainTable, "DESCRIBE");
+  checkStatement("HELP 'SELECT'", QtHelp, "HELP");
+  checkStatement("USE db", QtUse, "USE");
 }
 
 

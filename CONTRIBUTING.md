@@ -87,6 +87,23 @@ For diagram undo/redo integration tests, use the same runner with
 `testing\test-suite\data\studio\undo_test_model1.mwb` and releases its application
 test context afterward. These tests also require the built runtime resources,
 but do not require a MySQL connection.
+Layer regressions cover moving a populated layer, capturing a stationary figure
+by moving a layer underneath it, and deleting a populated layer while retaining
+its figures in the root layer. Each operation is checked through undo and redo.
+
+`LowLevelTestsForSqlStudioContextTest.StoredConnectionsTest` creates its own
+connection profile and checks save/reload, driver references, ownership, and
+connection parameters without connecting to a server or relying on installed
+servers. `Tests_for_WB_model_fileTest.Open_file_locking_test` checks the current
+lock behavior: a second model emits a warning and stays unopened until the first
+model releases its lock.
+
+`GRTInspectorValueTest.*` registers the test struct bindings before loading their
+metaclasses, so grouped and ungrouped book inspection work without another suite
+initializing them first. `GrtTreeModelBase.CommonTreeModelMethods` checks root,
+parent/child and sibling navigation, expansion defaults, node-ID mapping, and
+tree-change notifications. The wide-string constructor cases in `Utf8StringTest`
+cover all multilingual fixtures plus a supplementary Unicode character.
 
 For SQL-to-model diff/apply tests, use
 `--gtest_filter=db_mysql_pluginTest.*`. The suite parses SQL and applies changes
@@ -114,6 +131,31 @@ Fixture SQL is normalized from CRLF to LF before parsing so Git checkout setting
 do not affect stored definitions. Catalog comparisons remain exact; SQL-definition
 failures report the member path, lengths, and first differing byte instead of SQL.
 These tests do not write generated catalog XML into the fixture directories.
+`MySQLParserStandaloneTest.ParsingOfSubpartsOfTheMySQLLanguage` checks the
+routine and datatype parser entry points, including rejection of unrelated
+statements, malformed input, trailing statements, and recovery after errors.
+
+`--gtest_filter=Parser_moduleTest.*` runs offline parser-service tests for DDL,
+DML, partitioning, transactions, replication, prepared statements, administration,
+and utility statements. They check MySQL 5.7.10 syntax, query classification,
+rejection of malformed SQL, and error recovery on a reused parser context.
+Structured `parseStatement` results remain covered by the GRANT tests; the
+service does not implement structured results for the other statement types.
+
+`--gtest_filter=SQL_code_generationTest.*` runs offline by default. Each test
+initializes its own runtime, targeting MySQL 8.0, and checks generated SQL syntax,
+schema ordering, omitted schema qualifiers, invalid-collation removal, comment
+truncation, or exact expected scripts (normalizing only CRLF to LF).
+Model fixtures are loaded directly from `testing\test-suite\data` using
+`ModelFile`, without opening UI documents.
+To additionally execute exported scripts, set
+`SQLSTUDIO_SQL_GENERATION_LIVE_TESTS=1` and configure `DB_HOST`, `DB_PORT`,
+`DB_USER`, and `DB_PASSWORD` for an isolated MySQL test server. The flag accepts
+only `0` or `1`; connection and execution errors fail tests rather than skip them.
+As before, script execution covers the mock model, omitted-schema, schema-order,
+and invalid-collation cases; expected-script comparisons remain offline.
+This integration mode drops and recreates fixture schemas, including `A`, `B`,
+`test_schema`, and `sakila_test`; never point it at a production server.
 
 For SQL editor context-help tests, use `--gtest_filter=SqlEditorHelpTest.*`.
 Topic entries use inclusive lower and exclusive upper version bounds. The main
@@ -138,6 +180,12 @@ It checks catalog result ownership, product and driver metadata, and exception
 propagation with strict mocks. `getCatalogs()` is exercised rather than treated as
 unimplemented. Real getter values are checked by `DbcMetadataIntegrationTest.*`;
 the offline tests do not validate a live connector's metadata.
+The six `DbcMetadataIntegrationTest` cases are excluded from default native runs
+when `SQLSTUDIO_DBC_LIVE_TESTS` is unset, rather than reported as skipped.
+Setting the flag enables their default selection. An explicit `--gtest_filter`
+or `GTEST_FILTER` takes precedence over the default exclusion; selecting live
+tests without the flag still reports the required opt-in. Listing tests follows
+the same selection rules. The live checks are retained, not replaced with mocks.
 
 `--gtest_filter=DbcResultSetTest.*` runs all eight result-set contract tests offline.
 Strict mocks check statement/result ownership, prepared-query row access, repeated

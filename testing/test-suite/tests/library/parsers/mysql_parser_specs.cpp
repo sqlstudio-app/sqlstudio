@@ -973,9 +973,35 @@ TEST_F(MySQLParserTest, HexBinaryFloatDecimalAndIntNumberHandling) {
 //----------------------------------------------------------------------------------------------------------------------
 
 TEST(MySQLParserStandaloneTest, ParsingOfSubpartsOfTheMySQLLanguage) {
-    // Restricted content parsing (e.g. routines only, views only etc.).
-
-    GTEST_SKIP() << "this must be implemented yet";
+    SqlStudioTester tester;
+    tester.initializeRuntime();
+    auto services = MySQLParserServices::get();
+    auto context = services->createParserContext(tester.getRdbms()->characterSets(),
+                                                 bec::parse_version("8.0.21"), "", true);
+    const std::vector<std::pair<MySQLParseUnit, std::string>> cases = {
+      {MySQLParseUnit::PuCreateRoutine, "CREATE PROCEDURE p() BEGIN SELECT 1; END"},
+      {MySQLParseUnit::PuCreateRoutine, "CREATE FUNCTION f() RETURNS INT RETURN 1"},
+      {MySQLParseUnit::PuCreateRoutine, "CREATE FUNCTION f RETURNS STRING SONAME 'udf.dll'"},
+      {MySQLParseUnit::PuDataType, "DECIMAL(10,2)"},
+      {MySQLParseUnit::PuDataType, "VARCHAR(20) CHARACTER SET utf8mb4"},
+      {MySQLParseUnit::PuDataType, "ENUM('a', 'b')"}
+    };
+    for (const auto &entry : cases) {
+      SCOPED_TRACE(entry.second);
+      EXPECT_EQ(services->checkSqlSyntax(context, entry.second.c_str(), entry.second.size(), entry.first), 0U);
+      EXPECT_TRUE(context->errorsWithOffset(0).empty());
+      const std::string wrongUnit = "SELECT 1";
+      EXPECT_GT(services->checkSqlSyntax(context, wrongUnit.c_str(), wrongUnit.size(), entry.first), 0U);
+      const std::string trailingStatement = entry.second + "; SELECT 1";
+      EXPECT_GT(services->checkSqlSyntax(context, trailingStatement.c_str(), trailingStatement.size(), entry.first), 0U);
+      EXPECT_EQ(services->checkSqlSyntax(context, entry.second.c_str(), entry.second.size(), entry.first), 0U);
+      EXPECT_TRUE(context->errorsWithOffset(0).empty());
+    }
+    for (const auto &invalid : {"CREATE PROCEDURE p() BEGIN SELECT; END", "DECIMAL(10,)"}) {
+      const std::string sql = invalid;
+      const auto unit = sql.find("CREATE") == 0 ? MySQLParseUnit::PuCreateRoutine : MySQLParseUnit::PuDataType;
+      EXPECT_GT(services->checkSqlSyntax(context, sql.c_str(), sql.size(), unit), 0U) << sql;
+    }
 }
 
 //----------------------------------------------------------------------------------------------------------------------

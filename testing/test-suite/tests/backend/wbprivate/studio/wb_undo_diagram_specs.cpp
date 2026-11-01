@@ -538,13 +538,73 @@ protected:
   //--------------------------------------------------------------------------------------------------------------------
 
 TEST_F(UndoRedoForDiagramActionsInSqlStudioTest, MoveLayer) {
-    GTEST_SKIP() << "not implemented";
+    model_LayerRef layer(data->diagram->layers()[0]);
+    const double x = layer->left();
+    const double y = layer->top();
+    data->placeFigureWithTool(WB_TOOL_NOTE, x + 60, y + 50);
+    data->checkOnlyOneUndoAdded();
+    model_FigureRef figure(data->diagram->figures().get(data->diagram->figures().count() - 1));
+    ASSERT_EQ(figure->layer(), layer);
+    const double childX = figure->left();
+    const double childY = figure->top();
+    data->diagram->unselectAll();
+    data->diagramForm->set_tool(WB_TOOL_SELECT);
+    data->dragObject(data->diagramForm, layer, 30, 20);
+    data->checkOnlyOneUndoAdded();
+    EXPECT_EQ(*layer->left(), x + 30);
+    EXPECT_EQ(*layer->top(), y + 20);
+    EXPECT_EQ(*figure->left(), childX);
+    EXPECT_EQ(*figure->top(), childY);
+    EXPECT_EQ(figure->layer(), layer);
+
+    data->checkUndo();
+    EXPECT_EQ(*layer->left(), x);
+    EXPECT_EQ(*layer->top(), y);
+    EXPECT_EQ(figure->layer(), layer);
+    data->checkRedo();
+    EXPECT_EQ(*layer->left(), x + 30);
+    EXPECT_EQ(*layer->top(), y + 20);
+    EXPECT_EQ(*figure->left(), childX);
+    EXPECT_EQ(*figure->top(), childY);
+    data->checkUndo();
+    data->checkUndo();
 }
 
   //--------------------------------------------------------------------------------------------------------------------
 
 TEST_F(UndoRedoForDiagramActionsInSqlStudioTest, MoveLlayerUnderObjectToCaptureIt) {
-    GTEST_SKIP() << "not implemented";
+    model_LayerRef layer(data->diagram->layers()[0]);
+    const double x = layer->left();
+    const double y = layer->top();
+    data->placeFigureWithTool(WB_TOOL_NOTE, x + 60, y - 80);
+    data->checkOnlyOneUndoAdded();
+    model_FigureRef figure(data->diagram->figures().get(data->diagram->figures().count() - 1));
+    ASSERT_EQ(figure->layer(), data->diagram->rootLayer());
+    const double figureX = figure->left();
+    const double figureY = figure->top();
+    data->diagram->unselectAll();
+    data->diagramForm->set_tool(WB_TOOL_SELECT);
+    data->dragObject(data->diagramForm, layer, 0, -120);
+    data->checkOnlyOneUndoAdded();
+    EXPECT_EQ(*layer->top(), y - 120);
+    EXPECT_EQ(figure->layer(), layer);
+    EXPECT_NE(layer->figures().get_index(figure), BaseListRef::npos);
+    EXPECT_EQ(data->diagram->rootLayer()->figures().get_index(figure), BaseListRef::npos);
+    EXPECT_EQ(*figure->left() + *layer->left(), figureX);
+    EXPECT_EQ(*figure->top() + *layer->top(), figureY);
+
+    data->checkUndo();
+    EXPECT_EQ(*layer->top(), y);
+    EXPECT_EQ(figure->layer(), data->diagram->rootLayer());
+    EXPECT_EQ(*figure->left(), figureX);
+    EXPECT_EQ(*figure->top(), figureY);
+    data->checkRedo();
+    EXPECT_EQ(*layer->top(), y - 120);
+    EXPECT_EQ(figure->layer(), layer);
+    EXPECT_EQ(*figure->left() + *layer->left(), figureX);
+    EXPECT_EQ(*figure->top() + *layer->top(), figureY);
+    data->checkUndo();
+    data->checkUndo();
 }
 
   //--------------------------------------------------------------------------------------------------------------------
@@ -653,7 +713,39 @@ TEST_F(UndoRedoForDiagramActionsInSqlStudioTest, DeleteTable) {
   //--------------------------------------------------------------------------------------------------------------------
 
 TEST_F(UndoRedoForDiagramActionsInSqlStudioTest, DeleteLayerWithStuffInside) {
-    GTEST_SKIP() << "not implemented";
+    model_LayerRef layer(data->diagram->layers()[0]);
+    data->placeFigureWithTool(WB_TOOL_NOTE, *layer->left() + 60, *layer->top() + 50);
+    data->checkOnlyOneUndoAdded();
+    model_FigureRef figure(data->diagram->figures().get(data->diagram->figures().count() - 1));
+    ASSERT_EQ(figure->layer(), layer);
+    const auto layerCount = data->diagram->layers().count();
+    const auto figureCount = data->diagram->figures().count();
+    const double childX = figure->left();
+    const double childY = figure->top();
+    mforms::stub::UtilitiesWrapper::set_message_callback(message_ok_callback);
+    data->tester->wb->get_model_context()->delete_object(layer);
+    data->checkOnlyOneUndoAdded();
+    EXPECT_EQ(data->diagram->layers().count(), layerCount - 1);
+    EXPECT_EQ(data->diagram->layers().get_index(layer), BaseListRef::npos);
+    EXPECT_EQ(data->diagram->figures().count(), figureCount);
+    EXPECT_EQ(figure->layer(), data->diagram->rootLayer());
+    EXPECT_EQ(layer->figures().count(), 0U);
+    EXPECT_NE(data->diagram->rootLayer()->figures().get_index(figure), BaseListRef::npos);
+
+    data->checkUndo();
+    EXPECT_EQ(data->diagram->layers().count(), layerCount);
+    EXPECT_EQ(figure->layer(), layer);
+    EXPECT_NE(layer->figures().get_index(figure), BaseListRef::npos);
+    EXPECT_EQ(data->diagram->rootLayer()->figures().get_index(figure), BaseListRef::npos);
+    EXPECT_EQ(*figure->left(), childX);
+    EXPECT_EQ(*figure->top(), childY);
+    data->checkRedo();
+    EXPECT_EQ(data->diagram->layers().count(), layerCount - 1);
+    EXPECT_EQ(data->diagram->figures().count(), figureCount);
+    EXPECT_EQ(figure->layer(), data->diagram->rootLayer());
+    EXPECT_NE(data->diagram->rootLayer()->figures().get_index(figure), BaseListRef::npos);
+    data->checkUndo();
+    data->checkUndo();
 }
 
   //--------------------------------------------------------------------------------------------------------------------
