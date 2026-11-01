@@ -58,7 +58,12 @@
     <OutDir>$(ProjectDir)bin\x64\$(Configuration)\</OutDir>
     <IntDir>$(ProjectDir)obj\x64\$(Configuration)\</IntDir>
   </PropertyGroup>
-  <ItemDefinitionGroup />
+  <ItemDefinitionGroup>
+    <Link>
+      <!-- ANTLR's recursive parser needs more than the default 1 MiB stack for large SQL fixtures. -->
+      <StackReserveSize>16777216</StackReserveSize>
+    </Link>
+  </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <PrecompiledHeader>Use</PrecompiledHeader>
@@ -110,6 +115,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="core\context.h" />
+    <ClInclude Include="tests\library\cdbc\connector_mocks.h" />
+    <ClInclude Include="tests\library\cdbc\connector_test_fixture.h" />
     <ClInclude Include="core\grt_test_helpers.h" />
     <ClInclude Include="core\grt_values_test_data.h" />
     <ClInclude Include="core\helpers.h" />
@@ -210,7 +217,9 @@
     <ClCompile Include="tests\library\base\threading_specs.cpp" />
     <ClCompile Include="tests\library\base\utf8string_specs.cpp" />
     <ClCompile Include="tests\library\cdbc\dbc_connection_specs.cpp" />
-    <ClCompile Include="tests\library\cdbc\dbc_general_specs.cpp" />
+    <ClCompile Include="tests\library\cdbc\dbc_general_specs.cpp">
+      <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
     <ClCompile Include="tests\library\cdbc\dbc_metadata_specs.cpp" />
     <ClCompile Include="tests\library\cdbc\dbc_result_set_specs.cpp" />
     <ClCompile Include="tests\library\cdbc\dbc_statement_specs.cpp" />

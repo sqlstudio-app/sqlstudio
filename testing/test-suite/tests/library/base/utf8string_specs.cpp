@@ -116,13 +116,37 @@ TEST_F(Utf8StringTest, CopyConstructor) {
 }
 
 TEST_F(Utf8StringTest, ConstructorFromWCharPointer) {
-  // TODO: needs implementation
-  GTEST_SKIP() << "Pending: needs implementation";
+  EXPECT_TRUE(base::utf8string(L"").empty());
+  for (const auto &entry : languageStrings) {
+    SCOPED_TRACE(entry.first);
+    const auto wide = base::string_to_wstring(entry.second._text);
+    base::utf8string value(wide.c_str());
+    EXPECT_TRUE(value.validate());
+    EXPECT_EQ(value, entry.second._text);
+    EXPECT_EQ(value.length(), entry.second._length);
+    EXPECT_EQ(value.bytes(), entry.second._bytes);
+  }
+  base::utf8string supplementary(L"\U0001F600");
+  EXPECT_EQ(supplementary.to_string(), "\xF0\x9F\x98\x80");
+  EXPECT_EQ(supplementary.length(), 1U);
+  EXPECT_EQ(supplementary.bytes(), 4U);
 }
 
 TEST_F(Utf8StringTest, ConstructorFromWString) {
-  // TODO: needs implementation
-  GTEST_SKIP() << "Pending: needs implementation";
+  EXPECT_TRUE(base::utf8string(std::wstring()).empty());
+  for (const auto &entry : languageStrings) {
+    SCOPED_TRACE(entry.first);
+    const auto wide = base::string_to_wstring(entry.second._text);
+    base::utf8string value(wide);
+    EXPECT_TRUE(value.validate());
+    EXPECT_EQ(value, entry.second._text);
+    EXPECT_EQ(value.length(), entry.second._length);
+    EXPECT_EQ(value.bytes(), entry.second._bytes);
+  }
+  base::utf8string supplementary(std::wstring(L"\U0001F600"));
+  EXPECT_EQ(supplementary.to_string(), "\xF0\x9F\x98\x80");
+  EXPECT_EQ(supplementary.length(), 1U);
+  EXPECT_EQ(supplementary.bytes(), 4U);
 }
 
 TEST_F(Utf8StringTest, SubstringConstructorFromCharPointer) {
@@ -409,4 +433,3 @@ TEST_F(Utf8StringTest, Iterator) {
 }
 
 }
-

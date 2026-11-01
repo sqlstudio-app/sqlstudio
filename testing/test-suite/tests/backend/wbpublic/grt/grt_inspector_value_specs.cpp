@@ -67,6 +67,7 @@ public:
   std::string outputDir = testing::Context::get().outputDir();
 
   void SetUp() override {
+    register_structs_test_xml();
     grt::GRT::get()->load_metaclasses(testing::Context::get().tmpDataDir() + "/structs.test.xml");
     grt::GRT::get()->end_loading_metaclasses();
   }
@@ -550,7 +551,6 @@ TEST_F(GRTInspectorValueTest, TestInspectionOfTypedDict) {
 // ------------
 
 TEST_F(GRTInspectorValueTest, TestInspectionOfObjectUngrouped) {
-    GTEST_SKIP() << "require investigation of exception";
     std::vector<ssize_t> columns;
     columns.push_back(ValueInspectorBE::Name);
     columns.push_back(ValueInspectorBE::Value);
@@ -627,7 +627,6 @@ TEST_F(GRTInspectorValueTest, TestInspectionOfObjectUngrouped) {
 }
 
 TEST_F(GRTInspectorValueTest, TestInspectionOfObjectGrouped) {
-    GTEST_SKIP() << "require investigation of exception";
     std::vector<ssize_t> columns;
     columns.push_back(ValueInspectorBE::Name);
     columns.push_back(ValueInspectorBE::Value);
@@ -711,5 +710,4 @@ TEST_F(GRTInspectorValueTest, TestInspectionOfObjectGrouped) {
   
 }
 }
-
 

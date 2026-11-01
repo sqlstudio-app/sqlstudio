@@ -28,6 +28,7 @@
 
 #include "wb_test_helpers.h"
 #include "studio/wb_overview.h"
+#include "model/wb_component_physical.h"
 #include "base/util_functions.h"
 #include "wbcanvas/studio_physical_tablefigure_impl.h"
 
@@ -77,18 +78,37 @@ protected:
 };
 
 TEST_F(LowLevelTestsForSqlStudioContextTest, StoredConnectionsTest) {
-  GTEST_SKIP() << "need investigate why connection is not avaiable";
-  EXPECT_TRUE(data->tester->wb->get_root()->rdbmsMgmt()->storedConns().is_valid());
+  auto management = data->tester->wb->get_root()->rdbmsMgmt();
+  ASSERT_TRUE(management->storedConns().is_valid());
+  ASSERT_GT(management->rdbms().count(), 0U);
+  ASSERT_GT(management->rdbms().get(0)->drivers().count(), 0U);
+  auto driver = management->rdbms().get(0)->drivers().get(0);
+  db_mgmt_ConnectionRef connection(grt::Initialized);
+  connection->owner(management);
+  connection->driver(driver);
+  connection->name("StoredConnectionsTest");
+  connection->parameterValues().set("hostName", grt::StringRef("stored-connection.invalid"));
+  connection->parameterValues().set("port", grt::IntegerRef(3307));
+  connection->parameterValues().set("userName", grt::StringRef("test_user"));
+  const auto previousCount = management->storedConns().count();
+  management->storedConns().insert(connection);
+  data->tester->wb->save_connections();
+  management->storedConns().remove_value(connection);
 
-  // We cannot check the exact number because on Windows, if there are no server instances yet,
-  // instances and connections are created automatically from all installed servers.
-  // So we can't know in advance how many connections we will have (but at least 1, that in the test
-  // connection file).
-  EXPECT_TRUE(data->tester->wb->get_root()->rdbmsMgmt()->storedConns().count() > 0);
-
-  EXPECT_TRUE(data->tester->wb->get_root()->rdbmsMgmt()->rdbms().get(0)->drivers().count() > 0);
-
-  EXPECT_TRUE(data->tester->wb->get_root()->rdbmsMgmt()->storedConns().get(0)->driver().is_valid());
+  WBComponent *component = data->tester->wb->get_component<WBComponentPhysical>();
+  ASSERT_NE(component, nullptr);
+  component->load_app_options(false);
+  ASSERT_EQ(management->storedConns().count(), previousCount + 1);
+  auto restored = grt::find_named_object_in_list(management->storedConns(), "StoredConnectionsTest");
+  ASSERT_TRUE(restored.is_valid());
+  EXPECT_EQ(restored->owner(), management);
+  ASSERT_TRUE(restored->driver().is_valid());
+  EXPECT_EQ(restored->driver(), driver);
+  EXPECT_EQ(restored->parameterValues().get_string("hostName"), "stored-connection.invalid");
+  EXPECT_EQ(restored->parameterValues().get_int("port"), 3307);
+  EXPECT_EQ(restored->parameterValues().get_string("userName"), "test_user");
+  management->storedConns().remove_value(restored);
+  data->tester->wb->save_connections();
 }
 
 TEST_F(LowLevelTestsForSqlStudioContextTest, CheckIfCreatingAFkBetween2TablesWillCreateTheConnection) {

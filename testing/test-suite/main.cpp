@@ -24,12 +24,15 @@
 
 //#include "pch.h"  
 #include <gtest/gtest.h> 
+#include <cstdlib>
 #include "base/log.h"
 
 extern void register_all_metaclasses();
 
 
 int main(int argc, char** argv) {
+  if (!std::getenv("SQLSTUDIO_DBC_LIVE_TESTS") && !std::getenv("GTEST_FILTER"))
+    ::testing::GTEST_FLAG(filter) = "*-DbcMetadataIntegrationTest.*";
   testing::InitGoogleTest(&argc, argv);
   ::testing::GTEST_FLAG(death_test_style) = "fast";
   return RUN_ALL_TESTS();

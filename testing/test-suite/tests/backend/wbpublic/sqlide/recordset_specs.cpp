@@ -29,12 +29,13 @@
 
 #include "gtest/gtest.h"
 #include "wb_test_helpers.h"
-#include "wb_connection_helpers.h"
+#include "library/cdbc/connector_mocks.h"
+#include <sstream>
 
 namespace {
 
-static void dummy() {
-}
+using namespace testing;
+using namespace sql::test;
 
 class RecordsetTest : public ::testing::Test {
 protected:
@@ -45,17 +46,10 @@ protected:
     tester.reset(new SqlStudioTester());
     tester->initializeRuntime();
 
-    sql::DriverManager *manager = sql::DriverManager::getDriverManager();
-    manager->set_testing();
-    sql::Authentication::Ref auth;
-
-    connection = sql::Dbc_connection_handler::Ref(new sql::Dbc_connection_handler());
-
-    db_mgmt_ConnectionRef connectionProperties(grt::Initialized);
-    setupConnectionEnvironment(connectionProperties);
-    connection->ref = manager->getConnection(connectionProperties, std::bind(dummy));
-
-    EXPECT_NE(nullptr, connection->ref.get()) << "connection";
+    connection = std::make_shared<sql::Dbc_connection_handler>();
+    auto mockConnection = std::make_shared<StrictMock<MockConnection>>();
+    EXPECT_CALL(*mockConnection, destroyed());
+    connection->ref = sql::ConnectionWrapper(mockConnection, nullptr);
   }
 };
 
@@ -74,10 +68,22 @@ TEST_F(RecordsetTest, RecordsetStorage) {
   Recordset::Ref rs = Recordset::create();
   rs->data_storage(data_storage);
 
-  std::shared_ptr<sql::Statement> dbc_statement(connection->ref->createStatement());
-  dbc_statement->execute("select convert('', binary), convert(NULL, binary)");
+  NiceMock<MockResultSetMetaData> metadata;
+  EXPECT_CALL(metadata, getColumnCount()).WillRepeatedly(Return(2));
+  EXPECT_CALL(metadata, getColumnTypeName(_)).WillRepeatedly(Return(sql::SQLString("VARBINARY")));
+  EXPECT_CALL(metadata, getColumnType(_)).WillRepeatedly(Return(sql::DataType::VARBINARY));
+  EXPECT_CALL(metadata, isNumeric(_)).WillRepeatedly(Return(false));
+  EXPECT_CALL(metadata, getColumnLabel(1)).WillRepeatedly(Return(sql::SQLString("empty_blob")));
+  EXPECT_CALL(metadata, getColumnLabel(2)).WillRepeatedly(Return(sql::SQLString("null_blob")));
 
-  std::shared_ptr<sql::ResultSet> rset(dbc_statement->getResultSet());
+  auto result = std::make_shared<StrictMock<MockResultSet>>();
+  EXPECT_CALL(*result, destroyed());
+  EXPECT_CALL(*result, getMetaData()).WillOnce(Return(&metadata));
+  EXPECT_CALL(*result, next()).WillOnce(Return(true)).WillOnce(Return(false));
+  EXPECT_CALL(*result, isNull(uint32_t(1))).WillOnce(Return(false));
+  EXPECT_CALL(*result, isNull(uint32_t(2))).WillOnce(Return(true));
+  EXPECT_CALL(*result, getBlob(uint32_t(1))).WillOnce([] { return new std::istringstream(""); });
+  std::shared_ptr<sql::ResultSet> rset = result;
   data_storage->dbc_resultset(rset);
 
   rs->reset(true);

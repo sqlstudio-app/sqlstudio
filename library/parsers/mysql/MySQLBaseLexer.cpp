@@ -841,7 +841,8 @@ MySQLQueryType MySQLBaseLexer::determineQueryType() {
     case MySQLLexer::KILL_SYMBOL:
       return QtKill;
 
-    case MySQLLexer::DESCRIBE_SYMBOL: // EXPLAIN is converted to DESCRIBE in the lexer.
+    case MySQLLexer::EXPLAIN_SYMBOL:
+    case MySQLLexer::DESCRIBE_SYMBOL:
     case MySQLLexer::DESC_SYMBOL: {
       token = nextDefaultChannelToken();
       if (token->getType() == Token::EOF)
