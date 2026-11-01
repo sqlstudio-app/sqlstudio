@@ -28,12 +28,14 @@
 #include "grt_test_helpers.h"
 
 #include "studio/wb_overview.h"
+#include "model/wb_overview_physical.h"
 #include "grts/structs.studio.h"
 #include "grts/structs.studio.logical.h"
 #include "grts/structs.studio.physical.h"
 
 #include "gtest/gtest.h"
 
+#include <filesystem>
 #include <fstream>
 
 namespace {
@@ -47,8 +49,8 @@ static void ensure_files_equal(const std::string &test, const char *file, const 
   std::ifstream ref(reffile);
   std::ifstream f(file);
 
-  EXPECT_TRUE(ref.is_open());
-  EXPECT_TRUE(f.is_open());
+  ASSERT_TRUE(ref.is_open()) << reffile;
+  ASSERT_TRUE(f.is_open()) << file;
 
   while (!ref.eof() && !f.eof()) {
     getline(ref, refline);
@@ -62,6 +64,7 @@ static void ensure_files_equal(const std::string &test, const char *file, const 
 
 struct TestData {
   std::unique_ptr<SqlStudioTester> tester;
+  std::string dataDir;
 };
 
 class WBOverviewTest : public ::testing::Test {
@@ -69,6 +72,7 @@ protected:
   TestData *data = new TestData();
 
   void SetUp() override {
+    data->dataDir = std::filesystem::absolute("data").lexically_normal().u8string();
     data->tester.reset(new SqlStudioTester());
     data->tester->initializeRuntime();
   }
@@ -79,21 +83,23 @@ protected:
 };
 
 TEST_F(WBOverviewTest, OpenDocument) {
-  bool flag = data->tester->wb->open_document("data/studio/test_model1.mwb");
-  EXPECT_TRUE(flag);
+  ASSERT_TRUE(data->tester->wb->open_document(data->dataDir + "/studio/test_model1.mwb"));
 }
 
-  TEST_F(WBOverviewTest, DumpTreeModel) {
-    std::vector<ssize_t> columns;
+TEST_F(WBOverviewTest, DumpTreeModel) {
+  ASSERT_TRUE(data->tester->wb->open_document(data->dataDir + "/studio/test_model1.mwb"));
+  auto *overview = data->tester->wbui->get_physical_overview();
+  ASSERT_NE(overview, nullptr);
+  ASSERT_TRUE(overview->get_model().is_valid());
 
-    columns.push_back(wb::OverviewBE::Label);
-    columns.push_back(wb::OverviewBE::NodeType);
-    columns.push_back(wb::OverviewBE::Expanded);
-    columns.push_back(wb::OverviewBE::Height);
-    columns.push_back(wb::OverviewBE::DisplayMode);
-    testing::dumpTreeModel("output/overview_test2.txt", (TreeModel *)wb::WBContextUI::get()->get_physical_overview(),
-                           columns);
+  const std::vector<ssize_t> columns = {
+    wb::OverviewBE::Label, wb::OverviewBE::NodeType, wb::OverviewBE::Expanded,
+    wb::OverviewBE::Height, wb::OverviewBE::DisplayMode
+  };
+  std::filesystem::create_directories("output");
+  testing::dumpTreeModel("output/overview_test2.txt", overview, columns);
 
-    ensure_files_equal("initial overview state ", "output/overview_test2.txt", "data/be/overview_test2.txt");
-  }
+  ensure_files_equal("initial overview state ", "output/overview_test2.txt",
+                     (data->dataDir + "/be/overview_test2.txt").c_str());
+}
 }
