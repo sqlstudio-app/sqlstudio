@@ -69,7 +69,8 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Endless Control SQL API", version="1.0.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "https://appassets.example"],
+app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173",
+                                                "http://localhost:5174", "http://127.0.0.1:5174", "https://appassets.example"],
                    allow_methods=["GET", "POST", "DELETE", "OPTIONS"], allow_headers=["Content-Type"])
 app.include_router(create_connections_router(store, plugins))
 app.include_router(create_sql_router(session_manager))

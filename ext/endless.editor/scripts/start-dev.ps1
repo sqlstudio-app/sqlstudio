@@ -27,7 +27,7 @@ param([string] $NativeExecutable)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $workspacePath = Split-Path -Parent $PSScriptRoot
-$devUrl = 'http://127.0.0.1:5173'
+$devUrl = 'http://127.0.0.1:5174'
 $server = $null
 $previousUrl = $env:ENDLESS_CONTROL_WEB_URL
 
@@ -48,7 +48,7 @@ try {
         New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
         $nodePath = (Get-Command node -ErrorAction Stop).Source
         $vitePath = Join-Path $workspacePath 'web/node_modules/vite/bin/vite.js'
-        if (-not (Test-Path -LiteralPath $vitePath)) { throw 'Vite is missing. Run ./build.ps1 -InstallDependencies -Start.' }
+        if (-not (Test-Path -LiteralPath $vitePath)) { throw 'Vite is missing. Run ./scripts/build.ps1 -InstallDependencies -Start.' }
         $processOptions = @{
             FilePath = $nodePath
             ArgumentList = @('"' + $vitePath + '"', '--host', '127.0.0.1', '--port', '5173', '--strictPort')
@@ -75,7 +75,7 @@ try {
         $nativeProcess = Start-Process -FilePath $NativeExecutable -WorkingDirectory $workspacePath -PassThru
         Write-Host "Native app started (PID $($nativeProcess.Id)), using $devUrl with hot reload." -ForegroundColor Green
     }
-    Write-Host 'The SQL API must be running separately on port 8000. The React server remains running after this script exits.'
+    Write-Host 'The React server remains running after this script exits.'
 }
 catch {
     # Stop only a server created by this invocation if startup fails.

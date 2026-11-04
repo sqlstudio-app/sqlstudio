@@ -26,6 +26,8 @@ along with this program; if not, write to the Free Software Foundation, Inc.,
 
 A shared React interface hosted in native desktop windows on Windows, macOS, and Linux. The frontend is built once; each host loads the static `web/dist` output with its platform's webview.
 
+For a GitHub issue-ready overview of the currently implemented editor features and limitations, see [the Markdown feature description](feature-description.md).
+
 | Platform | Host | Webview |
 | --- | --- | --- |
 | Windows | C# / WinForms | Microsoft Edge WebView2 |
@@ -40,27 +42,27 @@ Use PowerShell 7 (`pwsh`) on Windows, macOS, or Linux:
 
 ```powershell
 # Build React and the native host for the current operating system (Release).
-pwsh ./build.ps1
+pwsh ./scripts/build.ps1
 
 # Build, start the React development server, then open the native app.
-pwsh ./build.ps1 -Start
+pwsh ./scripts/build.ps1 -Start
 
 # Build/start React only, without opening a native window.
-pwsh ./build.ps1 -Target React -Start
+pwsh ./scripts/build.ps1 -Target React -Start
 
 # Build React only.
-pwsh ./build.ps1 -Target React
+pwsh ./scripts/build.ps1 -Target React
 
 # Build only the native host using the existing web/dist bundle.
-pwsh ./build.ps1 -Target Native -Configuration Debug
+pwsh ./scripts/build.ps1 -Target Native -Configuration Debug
 
 # Explicit platform; run each command on that operating system.
-pwsh ./build.ps1 -Platform Windows
-pwsh ./build.ps1 -Platform macOS
-pwsh ./build.ps1 -Platform Linux
+pwsh ./scripts/build.ps1 -Platform Windows
+pwsh ./scripts/build.ps1 -Platform macOS
+pwsh ./scripts/build.ps1 -Platform Linux
 
 # Reinstall locked frontend dependencies before building.
-pwsh ./build.ps1 -InstallDependencies
+pwsh ./scripts/build.ps1 -InstallDependencies
 ```
 
 The script works from any current directory when invoked by its path. It runs `npm ci` automatically if `web/node_modules` is absent, checks required build tools, and stops on a failed command. `All` means React plus the native host for the current OS, not cross-compiling three operating systems. Use separate Windows/macOS/Linux machines or CI runners to build all three hosts. Native prerequisites are listed below.
@@ -142,7 +144,7 @@ The active frontend is now a SQL-only React/TypeScript notebook. Executed statem
 - **First start**: when connection.json does not exist the backend imports SqlStudio's `connections.xml` from `%APPDATA%\MySQL\SqlStudio` (Windows), `~/Library/Application Support/MySQL/SqlStudio` (macOS) or `~/.config/MySQL/SqlStudio` (Linux), or the path in `SQLSTUDIO_CONNECTIONS_XML`. If nothing is found it seeds one "Local development" entry from the DB_* environment variables below. Imports keep the GRT connection id, so re-importing the same file never duplicates entries; `password` parameters are dropped and unknown drivers are skipped.
 - API: `GET /api/plugins`, `GET/POST /api/connections`, `DELETE /api/connections/{id}`, `POST /api/connections/import` (`{ "xml": "..." }`), and `POST /api/sessions` now takes `{ "connectionId", "password" }`. Connection failures return 503 with the driver's message (for example *Access denied*), unknown ids 404, unsupported engines 400.
 
-### Start the backend (PowerShell, from the repository root)
+### Start the app (PowerShell, from the repository root)
 
 Requires Python 3.10+ and an existing MySQL, MariaDB, PostgreSQL, or QuestDB server.
 
@@ -154,10 +156,11 @@ $env:DB_HOST = '127.0.0.1'
 $env:DB_PORT = '3306'
 $env:DB_USERNAME = 'root'
 $env:DB_DATABASE = 'sakila'
-backend/.venv/Scripts/python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
+# Start the API and frontend together.
+./scripts/build.ps1 -Target React -Start
 ~~~
 
-Python packages: FastAPI, Uvicorn (standard extras), PyMySQL (RSA authentication extras), and psycopg (binary). MySQL and MariaDB share the PyMySQL plugin; PostgreSQL and QuestDB share the psycopg transport but generate engine-specific time-series SQL. The backend is a separate process; the native hosts do not launch it automatically.
+For API-only startup, run `backend/.venv/Scripts/python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000` from the repository root. Python packages: FastAPI, Uvicorn (standard extras), PyMySQL (RSA authentication extras), and psycopg (binary). MySQL and MariaDB share the PyMySQL plugin; PostgreSQL and QuestDB share the psycopg transport but generate engine-specific time-series SQL. The backend is a separate process; native hosts do not launch it automatically.
 
 Environment overrides are DB_TYPE, DB_HOST, DB_PORT, DB_USERNAME, DB_DATABASE, DB_RESULT_LIMIT (default 1000 rows per result set), and DB_TIMESERIES_LIMIT (default 100000 rows per time-series fetch); they only shape the seed connection and the row limits — day-to-day connections come from connection.json. DB_PASSWORD is used by the opt-in live test only.
 
@@ -187,7 +190,7 @@ npm --prefix web install
 npm --prefix web run dev
 ~~~
 
-Open http://127.0.0.1:5173. The API defaults to http://127.0.0.1:8000; VITE_API_URL can override it at frontend build/start time. Build with npm --prefix web run build (includes TypeScript checking). Tailwind 4 uses the official Vite plugin; theme tokens live in web/src/console.css. No remote fonts or mock database results are loaded by the application.
+Open http://127.0.0.1:5173. Backend CORS permits localhost and 127.0.0.1 on ports 5173 and 5174 (Vite's first fallback port); restart the backend after changing its CORS settings. The API defaults to http://127.0.0.1:8000; VITE_API_URL can override it at frontend build/start time. Build with npm --prefix web run build (includes TypeScript checking). Tailwind 4 uses the official Vite plugin; theme tokens live in web/src/console.css. No remote fonts or mock database results are loaded by the application.
 
 ### Architecture and important files
 

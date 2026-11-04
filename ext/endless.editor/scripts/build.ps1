@@ -25,15 +25,15 @@
 .SYNOPSIS
 Build the React frontend and/or the native host on Windows, macOS, or Linux.
 .EXAMPLE
-pwsh ./build.ps1
+pwsh ./scripts/build.ps1
 .EXAMPLE
-pwsh ./build.ps1 -Target React
+pwsh ./scripts/build.ps1 -Target React
 .EXAMPLE
-pwsh ./build.ps1 -Target Native -Configuration Debug
+pwsh ./scripts/build.ps1 -Target Native -Configuration Debug
 .EXAMPLE
-pwsh ./build.ps1 -Platform Windows -InstallDependencies
+pwsh ./scripts/build.ps1 -Platform Windows -InstallDependencies
 .EXAMPLE
-pwsh ./build.ps1 -Start
+pwsh ./scripts/build.ps1 -Start
 #>
 [CmdletBinding()]
 param(
@@ -53,6 +53,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$workspacePath = Split-Path -Parent $PSScriptRoot
 
 function Require-Tool([string] $Name, [string] $Instructions) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
@@ -68,13 +69,73 @@ function Invoke-BuildTool([string] $Name, [string[]] $Arguments) {
     }
 }
 
+function Test-BackendHealth([string] $Url) {
+    try {
+        $response = Invoke-WebRequest -Uri "$Url/api/health" -TimeoutSec 2
+    }
+    catch { return $false }
+    if ($response.Content -notmatch '"status"\s*:\s*"ok"') {
+        throw 'Port 8000 is serving an unexpected application. Stop that server before starting this backend.'
+    }
+    return $true
+}
+
+function Start-Backend {
+    $apiUrl = 'http://127.0.0.1:8000'
+    if (Test-BackendHealth $apiUrl) {
+        Write-Host "Using running backend: $apiUrl" -ForegroundColor Green
+        return
+    }
+
+    $backendDirectory = Join-Path $workspacePath 'backend'
+    $pythonPath = if ($IsWindows) {
+        Join-Path $backendDirectory '.venv\Scripts\python.exe'
+    }
+    else {
+        Join-Path $backendDirectory '.venv/bin/python'
+    }
+    if (-not (Test-Path -LiteralPath $pythonPath)) {
+        $pythonRelativePath = if ($IsWindows) { '.venv\Scripts\python.exe' } else { '.venv/bin/python' }
+        throw "Backend environment is missing. From the repository root, run: python -m venv backend/.venv; backend/$pythonRelativePath -m pip install -r backend/requirements.txt"
+    }
+
+    $logDirectory = Join-Path $workspacePath 'build/logs'
+    New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+    $processOptions = @{
+        FilePath = $pythonPath
+        ArgumentList = @('-m', 'uvicorn', 'app.main:app', '--app-dir', '.', '--host', '127.0.0.1', '--port', '8000')
+        WorkingDirectory = $backendDirectory
+        RedirectStandardOutput = Join-Path $logDirectory 'backend.log'
+        RedirectStandardError = Join-Path $logDirectory 'backend-error.log'
+        PassThru = $true
+    }
+    if ($IsWindows) { $processOptions.WindowStyle = 'Hidden' }
+    $backendProcess = Start-Process @processOptions
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    try {
+        while ($true) {
+            if (Test-BackendHealth $apiUrl) {
+                Write-Host "Backend ready: $apiUrl (PID $($backendProcess.Id))" -ForegroundColor Green
+                return
+            }
+            if ($backendProcess.HasExited) { throw "Backend exited. See $logDirectory/backend-error.log." }
+            if ([DateTime]::UtcNow -ge $deadline) { throw "Backend did not become ready in 30 seconds. See $logDirectory/backend-error.log." }
+            Start-Sleep -Milliseconds 250
+        }
+    }
+    catch {
+        if (-not $backendProcess.HasExited) { Stop-Process -Id $backendProcess.Id -ErrorAction SilentlyContinue }
+        throw
+    }
+}
+
 $hostPlatform = if ($IsWindows) { 'Windows' } elseif ($IsMacOS) { 'macOS' } elseif ($IsLinux) { 'Linux' } else { throw 'Unsupported operating system.' }
 $selectedPlatform = if ($Platform -eq 'Auto') { $hostPlatform } else { $Platform }
 $buildReact = $Target -in 'All', 'React'
 $buildNative = $Target -in 'All', 'Native'
 
-# Resolve every project path relative to this script, regardless of caller cwd.
-Push-Location -LiteralPath $PSScriptRoot
+# Resolve every project path relative to the workspace, regardless of caller cwd.
+Push-Location -LiteralPath $workspacePath
 try {
     if ($buildNative) {
         if ($selectedPlatform -ne $hostPlatform) {
@@ -99,13 +160,13 @@ try {
         }
         if ($buildReact) {
             Invoke-BuildTool $npm @('--prefix', 'web', 'run', 'build')
-            Write-Host "React output: $(Join-Path $PSScriptRoot 'web/dist')" -ForegroundColor Green
+            Write-Host "React output: $(Join-Path $workspacePath 'web/dist')" -ForegroundColor Green
         }
     }
 
     if ($buildNative) {
         if (-not $Start -and -not (Test-Path -LiteralPath 'web/dist/index.html')) {
-            throw 'React output is missing. Run ./build.ps1 -Target React first, or use -Target All.'
+            throw 'React output is missing. Run ./scripts/build.ps1 -Target React first, or use -Target All.'
         }
         $nativeConfig = $Configuration.ToLowerInvariant()
         switch ($selectedPlatform) {
@@ -128,16 +189,17 @@ try {
                 $output = "$buildDirectory/endless-control"
             }
         }
-        Write-Host "Native output: $(Join-Path $PSScriptRoot $output)" -ForegroundColor Green
+        Write-Host "Native output: $(Join-Path $workspacePath $output)" -ForegroundColor Green
         if ($selectedPlatform -ne 'Windows') {
-            Write-Host "When launching, set ENDLESS_CONTROL_WEB_ROOT to $(Join-Path $PSScriptRoot 'web/dist')."
+            Write-Host "When launching, set ENDLESS_CONTROL_WEB_ROOT to $(Join-Path $workspacePath 'web/dist')."
         }
     }
 
     if ($Start) {
+        Start-Backend
         $launchArguments = @{}
-        if ($buildNative) { $launchArguments.NativeExecutable = Join-Path $PSScriptRoot $output }
-        & (Join-Path $PSScriptRoot 'scripts/start-dev.ps1') @launchArguments
+        if ($buildNative) { $launchArguments.NativeExecutable = Join-Path $workspacePath $output }
+        & (Join-Path $PSScriptRoot 'start-dev.ps1') @launchArguments
     }
 }
 catch {
